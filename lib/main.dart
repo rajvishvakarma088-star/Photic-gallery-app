@@ -19,18 +19,18 @@ class MyApp extends StatelessWidget {
   ThemeData _buildTheme(Brightness brightness) {
     final isDark = brightness == Brightness.dark;
     final colorScheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF2E7D6B),
+      seedColor: const Color(0xFF7C6EE6),
       brightness: brightness,
     );
 
     final overlayStyle = isDark
         ? SystemUiOverlayStyle.light.copyWith(
-            statusBarColor: Colors.transparent,
-            systemNavigationBarColor: const Color(0xFF08120F),
+            statusBarColor: const Color(0xFF120C24),
+            systemNavigationBarColor: const Color(0xFF120C24),
           )
         : SystemUiOverlayStyle.dark.copyWith(
-            statusBarColor: Colors.transparent,
-            systemNavigationBarColor: const Color(0xFFF6F7F2),
+            statusBarColor: const Color(0xFFF7F4FF),
+            systemNavigationBarColor: const Color(0xFFF7F4FF),
           );
 
     return ThemeData(
@@ -38,20 +38,27 @@ class MyApp extends StatelessWidget {
       colorScheme: colorScheme,
       brightness: brightness,
       scaffoldBackgroundColor: Colors.transparent,
+      cardColor: isDark
+          ? Colors.white.withOpacity(0.08)
+          : Colors.white.withOpacity(0.62),
       appBarTheme: AppBarTheme(
         centerTitle: false,
         elevation: 0,
         scrolledUnderElevation: 0,
-        backgroundColor: Colors.transparent,
+        backgroundColor:
+            isDark ? const Color(0x22181430) : const Color(0xCCFFFFFF),
         surfaceTintColor: Colors.transparent,
         foregroundColor: colorScheme.onSurface,
         systemOverlayStyle: overlayStyle,
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor:
-            isDark ? const Color(0xFF13211D) : const Color(0xFFF3F4EE),
+            isDark ? const Color(0xCC181430) : const Color(0xD9FFFFFF),
         surfaceTintColor: Colors.transparent,
-        indicatorColor: colorScheme.primaryContainer,
+        shadowColor: Colors.transparent,
+        indicatorColor: isDark
+            ? const Color(0xFF7C6EE6).withOpacity(0.26)
+            : const Color(0xFFD9D0FF).withOpacity(0.7),
         labelTextStyle:
             WidgetStatePropertyAll(TextStyle(color: colorScheme.onSurface)),
         iconTheme: WidgetStateProperty.resolveWith(
@@ -62,6 +69,7 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
+      dividerColor: Colors.white.withOpacity(isDark ? 0.16 : 0.5),
       progressIndicatorTheme: ProgressIndicatorThemeData(
         color: colorScheme.primary,
       ),

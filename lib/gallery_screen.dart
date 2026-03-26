@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
+import 'album_detail_screen.dart';
+import 'glass_container.dart';
 import 'services/gallery_service.dart';
 import 'viewer_screen.dart';
 import 'theme_provider.dart';
@@ -17,8 +19,10 @@ class GalleryScreen extends StatefulWidget {
 class _GalleryScreenState extends State<GalleryScreen> {
   final GalleryService service = GalleryService();
   final ScrollController scrollController = ScrollController();
+  final ScrollController albumsScrollController = ScrollController();
 
   List<AssetEntity> images = [];
+  List<AlbumSummary> albums = [];
   final Set<String> favorites = {};
   final Set<String> animating = {};
 
@@ -28,21 +32,77 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   bool isLoading = true;
   bool isLoadingMore = false;
+  bool isLoadingAlbums = true;
   bool hasMore = true;
   int currentPage = 0;
   int selectedIndex = 0;
   static const int pageSize = 120;
 
+  List<_GallerySection> buildSections(List<AssetEntity> items) {
+    if (items.isEmpty) return const [];
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    final monthNames = const [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+
+    final sections = <_GallerySection>[];
+    String? currentTitle;
+    List<AssetEntity> currentItems = [];
+
+    String titleFor(AssetEntity asset) {
+      final date = asset.createDateTime;
+      final day = DateTime(date.year, date.month, date.day);
+      if (day == today) return 'Today';
+      if (day == yesterday) return 'Yesterday';
+      return '${monthNames[date.month - 1]} ${date.year}';
+    }
+
+    for (final asset in items) {
+      final title = titleFor(asset);
+      if (currentTitle != title) {
+        if (currentTitle != null) {
+          sections.add(_GallerySection(title: currentTitle, items: currentItems));
+        }
+        currentTitle = title;
+        currentItems = [asset];
+      } else {
+        currentItems.add(asset);
+      }
+    }
+
+    if (currentTitle != null) {
+      sections.add(_GallerySection(title: currentTitle, items: currentItems));
+    }
+
+    return sections;
+  }
+
   @override
   void initState() {
     super.initState();
     scrollController.addListener(onScroll);
+    loadAlbums();
     loadImages();
   }
 
   @override
   void dispose() {
     scrollController.dispose();
+    albumsScrollController.dispose();
     for (final notifier in thumbnailNotifiers.values) {
       notifier.dispose();
     }
@@ -72,15 +132,27 @@ class _GalleryScreenState extends State<GalleryScreen> {
     setState(() {
       if (loadMore) {
         images.addAll(data);
+        images.sort(service.compareAssetsByNewestFirst);
         isLoadingMore = false;
         currentPage = nextPage;
         hasMore = data.length == pageSize;
       } else {
         images = data;
+        images.sort(service.compareAssetsByNewestFirst);
         isLoading = false;
         currentPage = data.isEmpty ? 0 : nextPage;
         hasMore = data.length == pageSize;
       }
+    });
+  }
+
+  Future<void> loadAlbums() async {
+    final data = await service.fetchAlbums();
+    if (!mounted) return;
+
+    setState(() {
+      albums = data;
+      isLoadingAlbums = false;
     });
   }
 
@@ -152,31 +224,712 @@ class _GalleryScreenState extends State<GalleryScreen> {
   }
 
   Widget buildBottomBar(BuildContext context, bool isDark) {
-    return NavigationBar(
-      selectedIndex: selectedIndex,
-      backgroundColor: isDark
-          ? const Color(0xFF101916).withOpacity(0.96)
-          : const Color(0xFFF5F6F0).withOpacity(0.96),
-      onDestinationSelected: (index) {
-        if (index == selectedIndex) return;
-        setState(() => selectedIndex = index);
-      },
-      destinations: [
-        NavigationDestination(
-          icon: const Icon(Icons.photo_library_outlined),
-          selectedIcon: const Icon(Icons.photo_library),
-          label: 'Gallery',
-        ),
-        NavigationDestination(
-          icon: Badge.count(
-            count: favorites.length,
-            isLabelVisible: favorites.isNotEmpty,
-            child: const Icon(Icons.favorite_border),
+    return GlassContainer(
+      borderRadius: BorderRadius.circular(28),
+      child: NavigationBar(
+        height: 72,
+        selectedIndex: selectedIndex,
+        backgroundColor: Colors.transparent,
+        onDestinationSelected: (index) {
+          if (index == selectedIndex) return;
+          setState(() => selectedIndex = index);
+        },
+        destinations: [
+          NavigationDestination(
+            icon: const Icon(Icons.photo_library_outlined),
+            selectedIcon: const Icon(Icons.photo_library),
+            label: 'Gallery',
           ),
-          selectedIcon: const Icon(Icons.favorite),
-          label: 'Favorites',
+          const NavigationDestination(
+            icon: Icon(Icons.folder_copy_outlined),
+            selectedIcon: Icon(Icons.folder_copy),
+            label: 'Albums',
+          ),
+          NavigationDestination(
+            icon: Badge.count(
+              count: favorites.length,
+              isLabelVisible: favorites.isNotEmpty,
+              child: const Icon(Icons.favorite_border),
+            ),
+            selectedIcon: const Icon(Icons.favorite),
+            label: 'Favorites',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Route<T> buildCinematicRoute<T>(Widget page) {
+    return PageRouteBuilder<T>(
+      transitionDuration: const Duration(milliseconds: 520),
+      reverseTransitionDuration: const Duration(milliseconds: 380),
+      pageBuilder: (context, animation, secondaryAnimation) => page,
+      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+
+        return FadeTransition(
+          opacity: curved,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.035, 0.02),
+              end: Offset.zero,
+            ).animate(curved),
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.985, end: 1).animate(curved),
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> openAlbum(AlbumSummary album) async {
+    final albumImages = await service.fetchAlbumImages(album.album);
+    if (!mounted || albumImages.isEmpty) return;
+
+    await Navigator.push(
+      context,
+      buildCinematicRoute(
+        AlbumDetailScreen(
+          title: album.name,
+          images: albumImages,
+        ),
+      ),
+    );
+  }
+
+  Widget buildStatsChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required Color textColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: textColor),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: textColor,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildAlbumsView(ColorScheme colorScheme, bool isDark) {
+    if (isLoadingAlbums) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (albums.isEmpty) {
+      return Center(
+        child: Text(
+          'No albums found',
+          style: TextStyle(
+            color: colorScheme.onSurface.withOpacity(0.8),
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    final featuredAlbums =
+        albums.where((album) => album.isFeatured).toList(growable: false);
+    final otherAlbums =
+        albums.where((album) => !album.isFeatured).toList(growable: false);
+
+    return CustomScrollView(
+      controller: albumsScrollController,
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+            child: GlassContainer(
+              borderRadius: BorderRadius.circular(32),
+              child: Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: isDark
+                        ? [
+                            Colors.white.withOpacity(0.08),
+                            const Color(0xFF8B5CF6).withOpacity(0.12),
+                          ]
+                        : [
+                            Colors.white.withOpacity(0.82),
+                            const Color(0xFFE9D5FF).withOpacity(0.48),
+                          ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Albums',
+                      style: TextStyle(
+                        color: colorScheme.onSurface,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Browse photos by folder with rich previews and quick counts.',
+                      style: TextStyle(
+                        color: colorScheme.onSurface.withOpacity(0.72),
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        buildStatsChip(
+                          icon: Icons.folder_open_rounded,
+                          label: '${albums.length} folders',
+                          color: colorScheme.primaryContainer.withOpacity(0.9),
+                          textColor: colorScheme.onPrimaryContainer,
+                        ),
+                        buildStatsChip(
+                          icon: Icons.photo_library_rounded,
+                          label:
+                              '${albums.fold<int>(0, (sum, album) => sum + album.count)} photos',
+                          color: colorScheme.secondaryContainer.withOpacity(0.9),
+                          textColor: colorScheme.onSecondaryContainer,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (featuredAlbums.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
+              child: Row(
+                children: [
+                  Text(
+                    'Highlights',
+                    style: TextStyle(
+                      color: colorScheme.onSurface,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${featuredAlbums.length} picked',
+                    style: TextStyle(
+                      color: colorScheme.onSurface.withOpacity(0.65),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (featuredAlbums.isNotEmpty)
+          SliverToBoxAdapter(
+            child: SizedBox(
+              height: 220,
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                scrollDirection: Axis.horizontal,
+                itemCount: featuredAlbums.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 14),
+                itemBuilder: (context, index) {
+                  final album = featuredAlbums[index];
+                  return _CinematicReveal(
+                    order: index,
+                    child: buildFeaturedAlbumCard(
+                      album: album,
+                      colorScheme: colorScheme,
+                      isDark: isDark,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 22, 16, 12),
+            child: Text(
+              featuredAlbums.isEmpty ? 'All Albums' : 'More Albums',
+              style: TextStyle(
+                color: colorScheme.onSurface,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final album = otherAlbums[index];
+                return Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == otherAlbums.length - 1 ? 0 : 12,
+                  ),
+                  child: _CinematicReveal(
+                    order: index,
+                    child: buildAlbumListTile(
+                      album: album,
+                      colorScheme: colorScheme,
+                      isDark: isDark,
+                    ),
+                  ),
+                );
+              },
+              childCount: otherAlbums.length,
+            ),
+          ),
         ),
       ],
+    );
+  }
+
+  Widget buildFeaturedAlbumCard({
+    required AlbumSummary album,
+    required ColorScheme colorScheme,
+    required bool isDark,
+  }) {
+    return GestureDetector(
+      onTap: () => openAlbum(album),
+      child: SizedBox(
+        width: 176,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(28),
+                child: album.coverAsset != null
+                    ? buildImage(album.coverAsset!)
+                    : Container(color: colorScheme.surfaceContainerHigh),
+              ),
+            ),
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(28),
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withOpacity(isDark ? 0.44 : 0.34),
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 14,
+              left: 14,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.28),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Text(
+                  'Featured',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    album.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${album.count} photos',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.86),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildAlbumListTile({
+    required AlbumSummary album,
+    required ColorScheme colorScheme,
+    required bool isDark,
+  }) {
+    return GestureDetector(
+      onTap: () => openAlbum(album),
+      child: GlassContainer(
+        borderRadius: BorderRadius.circular(26),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: isDark
+                  ? [
+                      Colors.white.withOpacity(0.08),
+                      const Color(0xFF8B5CF6).withOpacity(0.08),
+                    ]
+                  : [
+                      Colors.white.withOpacity(0.84),
+                      const Color(0xFFE9D5FF).withOpacity(0.5),
+                    ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: SizedBox(
+                  width: 74,
+                  height: 74,
+                  child: album.coverAsset != null
+                      ? buildImage(album.coverAsset!)
+                      : Container(color: colorScheme.surfaceContainerHigh),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      album.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colorScheme.onSurface,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${album.count} images',
+                      style: TextStyle(
+                        color: colorScheme.onSurface.withOpacity(0.68),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: colorScheme.primaryContainer.withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  color: colorScheme.onPrimaryContainer,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget buildGridView(
+    List<AssetEntity> visibleImages,
+    ColorScheme colorScheme,
+  ) {
+    final sections = buildSections(visibleImages);
+
+    return CustomScrollView(
+      controller: scrollController,
+      cacheExtent: 1400,
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 110),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, sectionIndex) {
+                if (sectionIndex >= sections.length) {
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: SizedBox(
+                      height: 88,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: colorScheme.surface.withOpacity(0.45),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }
+
+                final section = sections[sectionIndex];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _CinematicReveal(
+                        order: sectionIndex,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.surface.withOpacity(0.28),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.22),
+                                  ),
+                                ),
+                                child: Text(
+                                  section.title,
+                                  style: TextStyle(
+                                    color: colorScheme.onSurface,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: -0.1,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 9,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: colorScheme.primaryContainer
+                                      .withOpacity(0.56),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  '${section.items.length}',
+                                  style: TextStyle(
+                                    color: colorScheme.onPrimaryContainer,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Container(
+                                  height: 1,
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [
+                                        colorScheme.primary.withOpacity(0.16),
+                                        colorScheme.primary.withOpacity(0.02),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: section.items.length,
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          mainAxisSpacing: 6,
+                          crossAxisSpacing: 6,
+                          childAspectRatio: 1,
+                        ),
+                        itemBuilder: (context, index) {
+                          final asset = section.items[index];
+                          final absoluteIndex = visibleImages.indexOf(asset);
+
+                          return _CinematicReveal(
+                            order: absoluteIndex,
+                            child: RepaintBoundary(
+                              child: GestureDetector(
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    buildCinematicRoute(
+                                      ViewerScreen(
+                                        images: visibleImages,
+                                        index: absoluteIndex,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                onDoubleTap: () {
+                                  final id = asset.id;
+
+                                  setState(() {
+                                    if (favorites.contains(id)) {
+                                      favorites.remove(id);
+                                    } else {
+                                      favorites.add(id);
+                                      animating.add(id);
+                                    }
+                                  });
+
+                                  Future.delayed(
+                                    const Duration(milliseconds: 500),
+                                    () {
+                                      if (mounted) {
+                                        setState(() {
+                                          animating.remove(id);
+                                        });
+                                      }
+                                    },
+                                  );
+                                },
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(16),
+                                      child: Hero(
+                                        tag: asset.id,
+                                        child: buildImage(asset),
+                                      ),
+                                    ),
+                                    if (favorites.contains(asset.id))
+                                      const Positioned(
+                                        top: 8,
+                                        right: 8,
+                                        child: Icon(
+                                          Icons.favorite,
+                                          color: Colors.red,
+                                        ),
+                                      ),
+                                    if (animating.contains(asset.id))
+                                      const Center(
+                                        child: Icon(
+                                          Icons.favorite,
+                                          color: Colors.white,
+                                          size: 60,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                );
+              },
+              childCount: sections.length + (isLoadingMore ? 1 : 0),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget buildBody(
+    List<AssetEntity> visibleImages,
+    ColorScheme colorScheme,
+    bool isDark,
+  ) {
+    if (selectedIndex == 1) {
+      return KeyedSubtree(
+        key: const ValueKey('albums'),
+        child: buildAlbumsView(colorScheme, isDark),
+      );
+    }
+    if (isLoading) {
+      return const KeyedSubtree(
+        key: ValueKey('loading'),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (visibleImages.isEmpty) {
+      return KeyedSubtree(
+        key: ValueKey('empty-$selectedIndex'),
+        child: Center(
+          child: Text(
+            selectedIndex == 0 ? 'No images found' : 'No favorite images yet',
+            style: TextStyle(
+              color: colorScheme.onSurface.withOpacity(0.8),
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    }
+    return KeyedSubtree(
+      key: ValueKey('grid-$selectedIndex-${visibleImages.length}'),
+      child: buildGridView(visibleImages, colorScheme),
     );
   }
 
@@ -186,12 +939,13 @@ class _GalleryScreenState extends State<GalleryScreen> {
     final isDark = themeProvider.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
     final topBarColor =
-        isDark ? const Color(0xFF07110E) : const Color(0xFFFCFCF7);
-    final visibleImages = selectedIndex == 0
+        isDark ? const Color(0xFF120C24) : const Color(0xFFF7F4FF);
+    final titles = ['Gallery', 'Albums', 'Favorites'];
+    final visibleImages = selectedIndex == 2
         ? images
-        : images
             .where((asset) => favorites.contains(asset.id))
-            .toList(growable: false);
+            .toList(growable: false)
+        : images;
 
     final overlayStyle = isDark
         ? SystemUiOverlayStyle.light
@@ -201,7 +955,25 @@ class _GalleryScreenState extends State<GalleryScreen> {
       backgroundColor: Colors.transparent,
       extendBody: true,
       appBar: AppBar(
-        title: const Text("Gallery"),
+        title: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 360),
+          transitionBuilder: (child, animation) {
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.15),
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            );
+          },
+          child: Text(
+            titles[selectedIndex],
+            key: ValueKey(selectedIndex),
+          ),
+        ),
         backgroundColor: topBarColor,
         surfaceTintColor: Colors.transparent,
         systemOverlayStyle: overlayStyle.copyWith(
@@ -232,128 +1004,70 @@ class _GalleryScreenState extends State<GalleryScreen> {
               gradient: LinearGradient(
                 colors: isDark
                     ? const [
-                        Color(0xFF07110E),
-                        Color(0xFF11221D),
-                        Color(0xFF1B3028),
+                        Color(0xFF120C24),
+                        Color(0xFF1E163A),
+                        Color(0xFF2C1F52),
                       ]
                     : const [
-                        Color(0xFFFCFCF7),
-                        Color(0xFFEFF2E8),
-                        Color(0xFFDDE7DA),
+                        Color(0xFFF7F4FF),
+                        Color(0xFFEDE5FF),
+                        Color(0xFFE3D5FF),
                       ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
             ),
           ),
-          if (isLoading)
-            const Center(child: CircularProgressIndicator())
-          else if (visibleImages.isEmpty)
-            Center(
-              child: Text(
-                selectedIndex == 0
-                    ? 'No images found'
-                    : 'No favorite images yet',
-                style: TextStyle(
-                  color: colorScheme.onSurface.withOpacity(0.8),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
+          Positioned(
+            top: -80,
+            right: -40,
+            child: IgnorePointer(
+              child: Container(
+                width: 220,
+                height: 220,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFA855F7).withOpacity(
+                    isDark ? 0.18 : 0.14,
+                  ),
                 ),
               ),
-            )
-          else
-            GridView.builder(
-              controller: scrollController,
-              cacheExtent: 1200,
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 110),
-              itemCount: visibleImages.length + (isLoadingMore ? 3 : 0),
-              gridDelegate:
-                  const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisSpacing: 6,
-                crossAxisSpacing: 6,
-                childAspectRatio: 1,
-              ),
-              itemBuilder: (context, index) {
-                if (index >= visibleImages.length) {
-                  return DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: colorScheme.surface.withOpacity(0.45),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Center(
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: colorScheme.primary,
-                      ),
-                    ),
-                  );
-                }
-
-                final asset = visibleImages[index];
-
-                return RepaintBoundary(
-                  child: GestureDetector(
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => ViewerScreen(
-                            images: visibleImages,
-                            index: index,
-                          ),
-                        ),
-                      );
-                    },
-                    onDoubleTap: () {
-                      final id = asset.id;
-
-                      setState(() {
-                        if (favorites.contains(id)) {
-                          favorites.remove(id);
-                        } else {
-                          favorites.add(id);
-                          animating.add(id);
-                        }
-                      });
-
-                      Future.delayed(
-                          const Duration(milliseconds: 500), () {
-                        if (mounted) {
-                          setState(() {
-                            animating.remove(id);
-                          });
-                        }
-                      });
-                    },
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(16),
-                          child: Hero(
-                            tag: asset.id,
-                            child: buildImage(asset),
-                          ),
-                        ),
-                        if (favorites.contains(asset.id))
-                          const Positioned(
-                            top: 8,
-                            right: 8,
-                            child: Icon(Icons.favorite,
-                                color: Colors.red),
-                          ),
-                        if (animating.contains(asset.id))
-                          const Center(
-                            child: Icon(Icons.favorite,
-                                color: Colors.white, size: 60),
-                          ),
-                      ],
-                    ),
-                  ),
-                );
-              },
             ),
+          ),
+          Positioned(
+            left: -70,
+            bottom: 80,
+            child: IgnorePointer(
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFDDD6FE).withOpacity(
+                    isDark ? 0.08 : 0.3,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 420),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, animation) {
+              return FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0.02, 0.02),
+                    end: Offset.zero,
+                  ).animate(animation),
+                  child: child,
+                ),
+              );
+            },
+            child: buildBody(visibleImages, colorScheme, isDark),
+          ),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -363,6 +1077,49 @@ class _GalleryScreenState extends State<GalleryScreen> {
           child: buildBottomBar(context, isDark),
         ),
       ),
+    );
+  }
+}
+
+class _GallerySection {
+  const _GallerySection({
+    required this.title,
+    required this.items,
+  });
+
+  final String title;
+  final List<AssetEntity> items;
+}
+
+class _CinematicReveal extends StatelessWidget {
+  const _CinematicReveal({
+    required this.order,
+    required this.child,
+  });
+
+  final int order;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final delay = order.clamp(0, 8).toInt() * 28;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: Duration(milliseconds: 360 + delay),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, builtChild) {
+        return Opacity(
+          opacity: value,
+          child: Transform.translate(
+            offset: Offset(0, (1 - value) * 20),
+            child: Transform.scale(
+              scale: 0.985 + (value * 0.015),
+              child: builtChild,
+            ),
+          ),
+        );
+      },
+      child: child,
     );
   }
 }
