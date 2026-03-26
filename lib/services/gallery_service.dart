@@ -1,7 +1,10 @@
 import 'package:photo_manager/photo_manager.dart';
 
 class GalleryService {
-  Future<List<AssetEntity>> fetchImages(int page) async {
+  Future<List<AssetEntity>> fetchImages({
+    int page = 0,
+    int size = 120,
+  }) async {
     final permission = await PhotoManager.requestPermissionExtend();
 
     if (!permission.isAuth) return [];
@@ -12,11 +15,15 @@ class GalleryService {
 
     if (albums.isEmpty) return [];
 
-    final recentAlbum = albums.first;
-
-    return recentAlbum.getAssetListPaged(
+    // The first album is typically the device-wide "Recent/All Photos" source
+    // and is much faster than merging every individual album.
+    final primaryAlbum = albums.first;
+    final images = await primaryAlbum.getAssetListPaged(
       page: page,
-      size: 100,
+      size: size,
     );
+
+    images.sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
+    return images;
   }
 }
