@@ -250,7 +250,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
         systemNavigationBarColor:
-            isDark ? Colors.black : Colors.white,
+            isDark ? Colors.black : const Color(0xFFF0E6FF),
         statusBarIconBrightness:
             isDark ? Brightness.light : Brightness.dark,
         systemNavigationBarIconBrightness:
@@ -280,8 +280,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
                           const Color(0xFF2C5364),
                         ]
                       : [
-                          const Color(0xFFfdfbfb),
-                          const Color(0xFFebedee),
+                          const Color(0xFFF2E9FF),
+                          const Color(0xFFE3D0FF),
                         ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
@@ -350,8 +350,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                   )
                                 : const LinearGradient(
                                     colors: [
-                                      Colors.white,
-                                      Color(0xFFF2F2F2),
+                                      Color(0xFFF4ECFF),
+                                      Color(0xFFE5D4FF),
                                     ],
                                   ),
                           ),

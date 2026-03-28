@@ -1,17 +1,37 @@
-# rajappppp
+# Gallery App 
+This is a smart gallery app which include.
 
-A new Flutter project.
+## Features 
+- finest UI used liquid glass element all over the app
+- favorite section for photos you like most
+- added thumbnail strips for smooth horizontal scrolling 
+- pinch to zoom and multigesture to grid count increase or decrease
 
-## Getting Started
+# Tech Stack 
+- flutter and dart 
+- packages like view_builder 
 
-This project is a starting point for a Flutter application.
+## Setup 
+1. Clone the repo "https:"
+2. go to the folder
+   cd project 
+3. install dependencies 
+   flutter pub get
+4. run the app
+   flutter run 
 
-A few resources to get you started if this is your first Flutter project:
+## Project Structure 
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Future Improvement 
+- Video player 
+- Music player
+- search feature
+- bin 
+- password 
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Contributing 
+  Feel free to fork this repo and contribute
+
+## Supports/Credits
+  Give a star if you like this project
+

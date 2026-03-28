@@ -16,7 +16,8 @@ class GalleryScreen extends StatefulWidget {
   State<GalleryScreen> createState() => _GalleryScreenState();
 }
 
-class _GalleryScreenState extends State<GalleryScreen> {
+class _GalleryScreenState extends State<GalleryScreen>
+    with WidgetsBindingObserver {
   final GalleryService service = GalleryService();
   final ScrollController scrollController = ScrollController();
   final ScrollController albumsScrollController = ScrollController();
@@ -33,10 +34,37 @@ class _GalleryScreenState extends State<GalleryScreen> {
   bool isLoading = true;
   bool isLoadingMore = false;
   bool isLoadingAlbums = true;
+  PermissionState? permissionState;
   bool hasMore = true;
   int currentPage = 0;
   int selectedIndex = 0;
   static const int pageSize = 120;
+  static const double pinchStepOutThreshold = 1.07;
+  static const double pinchStepInThreshold = 0.93;
+  static const int pinchStepCooldownMs = 55;
+  int galleryGridCount = 3;
+  double _lastPinchScale = 1.0;
+  double _pinchAccumulator = 1.0;
+  int _activePointers = 0;
+  DateTime _lastGridStepAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _pinchStepConsumed = false;
+
+  bool get _isPinching => _activePointers >= 2;
+
+  int get galleryThumbPx {
+    switch (galleryGridCount) {
+      case 2:
+        return 320;
+      case 3:
+        return 220;
+      case 4:
+        return 180;
+      case 5:
+        return 140;
+      default:
+        return 120;
+    }
+  }
 
   List<_GallerySection> buildSections(List<AssetEntity> items) {
     if (items.isEmpty) return const [];
@@ -64,7 +92,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
     List<AssetEntity> currentItems = [];
 
     String titleFor(AssetEntity asset) {
-      final date = asset.createDateTime;
+      final date = service.resolveAssetDate(asset);
       final day = DateTime(date.year, date.month, date.day);
       if (day == today) return 'Today';
       if (day == yesterday) return 'Yesterday';
@@ -94,6 +122,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     scrollController.addListener(onScroll);
     loadAlbums();
     loadImages();
@@ -101,12 +130,21 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     scrollController.dispose();
     albumsScrollController.dispose();
     for (final notifier in thumbnailNotifiers.values) {
       notifier.dispose();
     }
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    service.clearCache();
+    loadAlbums();
+    loadImages();
   }
 
   Future<void> loadImages({bool loadMore = false}) async {
@@ -119,6 +157,24 @@ class _GalleryScreenState extends State<GalleryScreen> {
       setState(() => isLoading = true);
       currentPage = 0;
       hasMore = true;
+    }
+
+    if (!loadMore) {
+      final permission = await service.requestImagePermission();
+      if (!mounted) return;
+
+      if (!permission.hasAccess) {
+        setState(() {
+          permissionState = permission;
+          images = [];
+          isLoading = false;
+          isLoadingMore = false;
+          hasMore = false;
+        });
+        return;
+      }
+
+      permissionState = permission;
     }
 
     final nextPage = loadMore ? currentPage + 1 : 0;
@@ -147,10 +203,22 @@ class _GalleryScreenState extends State<GalleryScreen> {
   }
 
   Future<void> loadAlbums() async {
+    final permission = await service.requestImagePermission();
+    if (!mounted) return;
+    if (!permission.hasAccess) {
+      setState(() {
+        permissionState = permission;
+        albums = [];
+        isLoadingAlbums = false;
+      });
+      return;
+    }
+
     final data = await service.fetchAlbums();
     if (!mounted) return;
 
     setState(() {
+      permissionState = permission;
       albums = data;
       isLoadingAlbums = false;
     });
@@ -165,25 +233,29 @@ class _GalleryScreenState extends State<GalleryScreen> {
     }
   }
 
-  Widget buildImage(AssetEntity asset) {
-    final id = asset.id;
+  Widget buildImage(
+    AssetEntity asset, {
+    int thumbPx = 220,
+  }) {
+    final id = '${asset.id}@$thumbPx';
 
     thumbnailNotifiers.putIfAbsent(id, () => ValueNotifier(null));
 
     final cached = thumbnailCache[id];
     if (cached != null) {
-      return Image.memory(
-        cached,
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-      );
-    }
+          return Image.memory(
+            cached,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.low,
+          );
+        }
 
     if (!loadingThumbs.contains(id)) {
       loadingThumbs.add(id);
       asset
           .thumbnailDataWithSize(
-            const ThumbnailSize(320, 320),
+            ThumbnailSize(thumbPx, thumbPx),
           )
           .then((data) {
         if (!mounted) return;
@@ -205,6 +277,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
             value,
             fit: BoxFit.cover,
             gaplessPlayback: true,
+            filterQuality: FilterQuality.low,
           );
         }
         return DecoratedBox(
@@ -310,6 +383,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
     required Color textColor,
   }) {
     return Container(
+      key: ValueKey(label),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: color,
@@ -362,23 +436,18 @@ class _GalleryScreenState extends State<GalleryScreen> {
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-            child: GlassContainer(
-              borderRadius: BorderRadius.circular(32),
+            child: RepaintBoundary(
               child: Container(
                 padding: const EdgeInsets.all(18),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: isDark
-                        ? [
-                            Colors.white.withOpacity(0.08),
-                            const Color(0xFF8B5CF6).withOpacity(0.12),
-                          ]
-                        : [
-                            Colors.white.withOpacity(0.82),
-                            const Color(0xFFE9D5FF).withOpacity(0.48),
-                          ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : Colors.white.withValues(alpha: 0.84),
+                  borderRadius: BorderRadius.circular(32),
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.12)
+                        : Colors.white.withValues(alpha: 0.55),
                   ),
                 ),
                 child: Column(
@@ -457,14 +526,17 @@ class _GalleryScreenState extends State<GalleryScreen> {
             child: SizedBox(
               height: 220,
               child: ListView.separated(
+                cacheExtent: 800,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(
+                  decelerationRate: ScrollDecelerationRate.fast,
+                ),
                 itemCount: featuredAlbums.length,
                 separatorBuilder: (_, __) => const SizedBox(width: 14),
                 itemBuilder: (context, index) {
                   final album = featuredAlbums[index];
-                  return _CinematicReveal(
-                    order: index,
+                  return RepaintBoundary(
                     child: buildFeaturedAlbumCard(
                       album: album,
                       colorScheme: colorScheme,
@@ -498,8 +570,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                   padding: EdgeInsets.only(
                     bottom: index == otherAlbums.length - 1 ? 0 : 12,
                   ),
-                  child: _CinematicReveal(
-                    order: index,
+                  child: RepaintBoundary(
                     child: buildAlbumListTile(
                       album: album,
                       colorScheme: colorScheme,
@@ -531,7 +602,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(28),
                 child: album.coverAsset != null
-                    ? buildImage(album.coverAsset!)
+                    ? buildImage(album.coverAsset!, thumbPx: 180)
                     : Container(color: colorScheme.surfaceContainerHigh),
               ),
             ),
@@ -542,7 +613,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                   gradient: LinearGradient(
                     colors: [
                       Colors.transparent,
-                      Colors.black.withOpacity(isDark ? 0.44 : 0.34),
+                      Colors.black.withOpacity(isDark ? 0.44 : 0.4),
                     ],
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
@@ -613,23 +684,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
       onTap: () => openAlbum(album),
       child: GlassContainer(
         borderRadius: BorderRadius.circular(26),
-        child: Container(
+        enableBlur: false,
+        child: Padding(
           padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: isDark
-                  ? [
-                      Colors.white.withOpacity(0.08),
-                      const Color(0xFF8B5CF6).withOpacity(0.08),
-                    ]
-                  : [
-                      Colors.white.withOpacity(0.84),
-                      const Color(0xFFE9D5FF).withOpacity(0.5),
-                    ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
           child: Row(
             children: [
               ClipRRect(
@@ -638,7 +695,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                   width: 74,
                   height: 74,
                   child: album.coverAsset != null
-                      ? buildImage(album.coverAsset!)
+                      ? buildImage(album.coverAsset!, thumbPx: 96)
                       : Container(color: colorScheme.surfaceContainerHigh),
                 ),
               ),
@@ -672,7 +729,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: colorScheme.primaryContainer.withOpacity(0.9),
+                  color: colorScheme.primaryContainer.withOpacity(0.92),
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Icon(
@@ -692,17 +749,95 @@ class _GalleryScreenState extends State<GalleryScreen> {
     ColorScheme colorScheme,
   ) {
     final sections = buildSections(visibleImages);
+    final indexByAssetId = <String, int>{
+      for (var i = 0; i < visibleImages.length; i++) visibleImages[i].id: i,
+    };
 
-    return CustomScrollView(
-      controller: scrollController,
-      cacheExtent: 1400,
-      physics: const BouncingScrollPhysics(),
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 110),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, sectionIndex) {
+    return Listener(
+      onPointerDown: (_) {
+        final wasPinching = _isPinching;
+        _activePointers++;
+        if (!wasPinching && _isPinching) {
+          setState(() {});
+        }
+      },
+      onPointerUp: (_) {
+        final wasPinching = _isPinching;
+        _activePointers = (_activePointers - 1).clamp(0, 20);
+        if (wasPinching && !_isPinching) {
+          setState(() {});
+        }
+      },
+      onPointerCancel: (_) {
+        final wasPinching = _isPinching;
+        _activePointers = (_activePointers - 1).clamp(0, 20);
+        if (wasPinching && !_isPinching) {
+          setState(() {});
+        }
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onScaleStart: (details) {
+          _lastPinchScale = 1.0;
+          _pinchAccumulator = 1.0;
+          _pinchStepConsumed = false;
+        },
+        onScaleUpdate: (details) {
+          if (_pinchStepConsumed) return;
+          if (!_isPinching) {
+            _lastPinchScale = details.scale;
+            return;
+          }
+
+          final factor = details.scale / _lastPinchScale;
+          _lastPinchScale = details.scale;
+          if (!factor.isFinite || factor <= 0) return;
+
+          _pinchAccumulator *= factor;
+          int nextCount = galleryGridCount;
+          var updatedAccumulator = _pinchAccumulator;
+
+          if (updatedAccumulator >= pinchStepOutThreshold && nextCount > 2) {
+            nextCount--;
+            updatedAccumulator /= pinchStepOutThreshold;
+          } else if (updatedAccumulator <= pinchStepInThreshold &&
+              nextCount < 6) {
+            nextCount++;
+            updatedAccumulator /= pinchStepInThreshold;
+          }
+
+          _pinchAccumulator = updatedAccumulator.clamp(0.75, 1.25).toDouble();
+          if (nextCount == galleryGridCount) return;
+
+          final now = DateTime.now();
+          if (now.difference(_lastGridStepAt).inMilliseconds <
+              pinchStepCooldownMs) {
+            return;
+          }
+
+          setState(() {
+            galleryGridCount = nextCount;
+            _lastGridStepAt = now;
+          });
+          _pinchStepConsumed = true;
+        },
+        onScaleEnd: (details) {
+          _lastPinchScale = 1.0;
+          _pinchAccumulator = 1.0;
+          _pinchStepConsumed = false;
+        },
+        child: CustomScrollView(
+          controller: scrollController,
+          cacheExtent: 900,
+          physics: _isPinching
+              ? const NeverScrollableScrollPhysics()
+              : const BouncingScrollPhysics(),
+          slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(10, 2, 10, 110),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, sectionIndex) {
                 if (sectionIndex >= sections.length) {
                   return Padding(
                     padding: const EdgeInsets.only(top: 12),
@@ -724,174 +859,176 @@ class _GalleryScreenState extends State<GalleryScreen> {
                   );
                 }
 
-                final section = sections[sectionIndex];
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _CinematicReveal(
-                        order: sectionIndex,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: colorScheme.surface.withOpacity(0.28),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(0.22),
-                                  ),
-                                ),
-                                child: Text(
-                                  section.title,
-                                  style: TextStyle(
-                                    color: colorScheme.onSurface,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: -0.1,
-                                  ),
+                  final section = sections[sectionIndex];
+                  final isFirstSection = sectionIndex == 0;
+                  return Transform.translate(
+                    offset: Offset(0, isFirstSection ? 0 : -18),
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
+                            child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: colorScheme.surface.withOpacity(0.28),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.22),
                                 ),
                               ),
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 9,
-                                  vertical: 5,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: colorScheme.primaryContainer
-                                      .withOpacity(0.56),
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: Text(
-                                  '${section.items.length}',
-                                  style: TextStyle(
-                                    color: colorScheme.onPrimaryContainer,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Container(
-                                  height: 1,
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      colors: [
-                                        colorScheme.primary.withOpacity(0.16),
-                                        colorScheme.primary.withOpacity(0.02),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: section.items.length,
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          mainAxisSpacing: 6,
-                          crossAxisSpacing: 6,
-                          childAspectRatio: 1,
-                        ),
-                        itemBuilder: (context, index) {
-                          final asset = section.items[index];
-                          final absoluteIndex = visibleImages.indexOf(asset);
-
-                          return _CinematicReveal(
-                            order: absoluteIndex,
-                            child: RepaintBoundary(
-                              child: GestureDetector(
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    buildCinematicRoute(
-                                      ViewerScreen(
-                                        images: visibleImages,
-                                        index: absoluteIndex,
-                                      ),
-                                    ),
-                                  );
-                                },
-                                onDoubleTap: () {
-                                  final id = asset.id;
-
-                                  setState(() {
-                                    if (favorites.contains(id)) {
-                                      favorites.remove(id);
-                                    } else {
-                                      favorites.add(id);
-                                      animating.add(id);
-                                    }
-                                  });
-
-                                  Future.delayed(
-                                    const Duration(milliseconds: 500),
-                                    () {
-                                      if (mounted) {
-                                        setState(() {
-                                          animating.remove(id);
-                                        });
-                                      }
-                                    },
-                                  );
-                                },
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(16),
-                                      child: Hero(
-                                        tag: asset.id,
-                                        child: buildImage(asset),
-                                      ),
-                                    ),
-                                    if (favorites.contains(asset.id))
-                                      const Positioned(
-                                        top: 8,
-                                        right: 8,
-                                        child: Icon(
-                                          Icons.favorite,
-                                          color: Colors.red,
-                                        ),
-                                      ),
-                                    if (animating.contains(asset.id))
-                                      const Center(
-                                        child: Icon(
-                                          Icons.favorite,
-                                          color: Colors.white,
-                                          size: 60,
-                                        ),
-                                      ),
-                                  ],
+                              child: Text(
+                                section.title,
+                                style: TextStyle(
+                                  color: colorScheme.onSurface,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: -0.1,
                                 ),
                               ),
                             ),
-                          );
-                        },
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 9,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: colorScheme.primaryContainer
+                                    .withOpacity(0.56),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                '${section.items.length}',
+                                style: TextStyle(
+                                  color: colorScheme.onPrimaryContainer,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Container(
+                                height: 1,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      colorScheme.primary.withOpacity(0.16),
+                                      colorScheme.primary.withOpacity(0.02),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                            ),
+                          ),
+                          GridView.builder(
+                            key: ValueKey('grid-${section.title}-$galleryGridCount'),
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: section.items.length,
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: galleryGridCount,
+                              mainAxisSpacing: 6,
+                              crossAxisSpacing: 6,
+                              childAspectRatio: 1,
+                            ),
+                            itemBuilder: (context, index) {
+                              final asset = section.items[index];
+                              final absoluteIndex =
+                                  indexByAssetId[asset.id] ?? 0;
+
+                              return RepaintBoundary(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      buildCinematicRoute(
+                                        ViewerScreen(
+                                          images: visibleImages,
+                                          index: absoluteIndex,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  onDoubleTap: () {
+                                    final id = asset.id;
+
+                                    setState(() {
+                                      if (favorites.contains(id)) {
+                                        favorites.remove(id);
+                                      } else {
+                                        favorites.add(id);
+                                        animating.add(id);
+                                      }
+                                    });
+
+                                    Future.delayed(
+                                      const Duration(milliseconds: 500),
+                                      () {
+                                        if (mounted) {
+                                          setState(() {
+                                            animating.remove(id);
+                                          });
+                                        }
+                                      },
+                                    );
+                                  },
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(16),
+                                        child: buildImage(
+                                          asset,
+                                          thumbPx: galleryThumbPx,
+                                        ),
+                                      ),
+                                      if (favorites.contains(asset.id))
+                                        const Positioned(
+                                          top: 8,
+                                          right: 8,
+                                          child: Icon(
+                                            Icons.favorite,
+                                            color: Colors.red,
+                                          ),
+                                        ),
+                                      if (animating.contains(asset.id))
+                                        const Center(
+                                          child: Icon(
+                                            Icons.favorite,
+                                            color: Colors.white,
+                                            size: 60,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                );
-              },
-              childCount: sections.length + (isLoadingMore ? 1 : 0),
+                    ),
+                  );
+                },
+                childCount: sections.length + (isLoadingMore ? 1 : 0),
+              ),
             ),
           ),
+        ],
         ),
-      ],
+      ),
     );
   }
 
@@ -910,6 +1047,61 @@ class _GalleryScreenState extends State<GalleryScreen> {
       return const KeyedSubtree(
         key: ValueKey('loading'),
         child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (selectedIndex == 0 && permissionState != null && !permissionState!.hasAccess) {
+      return KeyedSubtree(
+        key: const ValueKey('permission-empty'),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.photo_library_outlined,
+                  size: 44,
+                  color: colorScheme.onSurface.withOpacity(0.75),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Gallery permission is required',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: colorScheme.onSurface,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Allow photos access, then tap retry.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: colorScheme.onSurface.withOpacity(0.75),
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.tonal(
+                  onPressed: () async {
+                    await PhotoManager.openSetting();
+                  },
+                  child: const Text('Open Settings'),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () {
+                    service.clearCache();
+                    loadAlbums();
+                    loadImages();
+                  },
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
     if (visibleImages.isEmpty) {
@@ -939,7 +1131,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
     final isDark = themeProvider.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
     final topBarColor =
-        isDark ? const Color(0xFF120C24) : const Color(0xFFF7F4FF);
+        isDark ? const Color(0xFF120C24) : const Color(0xFFF1E8FF);
     final titles = ['Gallery', 'Albums', 'Favorites'];
     final visibleImages = selectedIndex == 2
         ? images
@@ -1009,9 +1201,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
                         Color(0xFF2C1F52),
                       ]
                     : const [
-                        Color(0xFFF7F4FF),
-                        Color(0xFFEDE5FF),
-                        Color(0xFFE3D5FF),
+                        Color(0xFFF0E5FF),
+                        Color(0xFFE4D3FF),
+                        Color(0xFFD5BDFF),
                       ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -1028,7 +1220,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: const Color(0xFFA855F7).withOpacity(
-                    isDark ? 0.18 : 0.14,
+                    isDark ? 0.18 : 0.24,
                   ),
                 ),
               ),
@@ -1044,7 +1236,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: const Color(0xFFDDD6FE).withOpacity(
-                    isDark ? 0.08 : 0.3,
+                    isDark ? 0.08 : 0.4,
                   ),
                 ),
               ),
@@ -1089,37 +1281,4 @@ class _GallerySection {
 
   final String title;
   final List<AssetEntity> items;
-}
-
-class _CinematicReveal extends StatelessWidget {
-  const _CinematicReveal({
-    required this.order,
-    required this.child,
-  });
-
-  final int order;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final delay = order.clamp(0, 8).toInt() * 28;
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: Duration(milliseconds: 360 + delay),
-      curve: Curves.easeOutCubic,
-      builder: (context, value, builtChild) {
-        return Opacity(
-          opacity: value,
-          child: Transform.translate(
-            offset: Offset(0, (1 - value) * 20),
-            child: Transform.scale(
-              scale: 0.985 + (value * 0.015),
-              child: builtChild,
-            ),
-          ),
-        );
-      },
-      child: child,
-    );
-  }
 }

@@ -22,9 +22,35 @@ class AlbumDetailScreen extends StatefulWidget {
 }
 
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
+  static const double pinchStepOutThreshold = 1.08;
+  static const double pinchStepInThreshold = 0.92;
+  static const int pinchStepCooldownMs = 55;
   final Map<String, Uint8List?> thumbnailCache = {};
   final Map<String, ValueNotifier<Uint8List?>> thumbnailNotifiers = {};
   final Set<String> loadingThumbs = {};
+  int albumGridCount = 3;
+  double _lastPinchScale = 1.0;
+  double _pinchAccumulator = 1.0;
+  int _activePointers = 0;
+  DateTime _lastGridStepAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _pinchStepConsumed = false;
+
+  bool get _isPinching => _activePointers >= 2;
+
+  int get albumThumbPx {
+    switch (albumGridCount) {
+      case 2:
+        return 320;
+      case 3:
+        return 240;
+      case 4:
+        return 180;
+      case 5:
+        return 140;
+      default:
+        return 120;
+    }
+  }
 
   @override
   void dispose() {
@@ -124,7 +150,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     final themeProvider = context.watch<ThemeProvider>();
     final isDark = themeProvider.isDark(context);
     final topBarColor =
-        isDark ? const Color(0xFF120C24) : const Color(0xFFF7F4FF);
+        isDark ? const Color(0xFF120C24) : const Color(0xFFF1E8FF);
 
     final overlayStyle = isDark
         ? SystemUiOverlayStyle.light
@@ -172,9 +198,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         Color(0xFF2C1F52),
                       ]
                     : const [
-                        Color(0xFFF7F4FF),
-                        Color(0xFFEDE5FF),
-                        Color(0xFFE3D5FF),
+                        Color(0xFFF0E5FF),
+                        Color(0xFFE4D3FF),
+                        Color(0xFFD5BDFF),
                       ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -191,7 +217,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: const Color(0xFFA855F7).withOpacity(
-                    isDark ? 0.18 : 0.15,
+                    isDark ? 0.18 : 0.24,
                   ),
                 ),
               ),
@@ -201,49 +227,186 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             padding: const EdgeInsets.fromLTRB(10, 8, 10, 18),
             child: GlassContainer(
               borderRadius: BorderRadius.circular(30),
-              child: GridView.builder(
-                padding: const EdgeInsets.all(10),
-                cacheExtent: 1200,
-                itemCount: widget.images.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 6,
-                  crossAxisSpacing: 6,
-                  childAspectRatio: 1,
-                ),
-                itemBuilder: (context, index) {
-                  final asset = widget.images[index];
-                  return _AlbumReveal(
-                    order: index,
-                    child: RepaintBoundary(
-                      child: GestureDetector(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            buildCinematicRoute(
-                              ViewerScreen(
-                                images: widget.images,
-                                index: index,
+              child: Listener(
+                onPointerDown: (_) {
+                  final wasPinching = _isPinching;
+                  _activePointers++;
+                  if (!wasPinching && _isPinching) {
+                    setState(() {});
+                  }
+                },
+                onPointerUp: (_) {
+                  final wasPinching = _isPinching;
+                  _activePointers = (_activePointers - 1).clamp(0, 20);
+                  if (wasPinching && !_isPinching) {
+                    setState(() {});
+                  }
+                },
+                onPointerCancel: (_) {
+                  final wasPinching = _isPinching;
+                  _activePointers = (_activePointers - 1).clamp(0, 20);
+                  if (wasPinching && !_isPinching) {
+                    setState(() {});
+                  }
+                },
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onScaleStart: (details) {
+                    _lastPinchScale = 1.0;
+                    _pinchAccumulator = 1.0;
+                    _pinchStepConsumed = false;
+                  },
+                  onScaleUpdate: (details) {
+                    if (_pinchStepConsumed) return;
+                    if (!_isPinching) {
+                      _lastPinchScale = details.scale;
+                      return;
+                    }
+
+                    final factor = details.scale / _lastPinchScale;
+                    _lastPinchScale = details.scale;
+                    if (!factor.isFinite || factor <= 0) return;
+
+                    _pinchAccumulator *= factor;
+                    int nextCount = albumGridCount;
+                    var updatedAccumulator = _pinchAccumulator;
+
+                    if (updatedAccumulator >= pinchStepOutThreshold &&
+                        nextCount > 2) {
+                      nextCount--;
+                      updatedAccumulator /= pinchStepOutThreshold;
+                    } else if (updatedAccumulator <= pinchStepInThreshold &&
+                        nextCount < 6) {
+                      nextCount++;
+                      updatedAccumulator /= pinchStepInThreshold;
+                    }
+
+                    _pinchAccumulator =
+                        updatedAccumulator.clamp(0.75, 1.25).toDouble();
+                    if (nextCount == albumGridCount) return;
+
+                    final now = DateTime.now();
+                    if (now.difference(_lastGridStepAt).inMilliseconds <
+                        pinchStepCooldownMs) {
+                      return;
+                    }
+
+                    setState(() {
+                      albumGridCount = nextCount;
+                      _lastGridStepAt = now;
+                    });
+                    _pinchStepConsumed = true;
+                  },
+                  onScaleEnd: (details) {
+                    _lastPinchScale = 1.0;
+                    _pinchAccumulator = 1.0;
+                    _pinchStepConsumed = false;
+                  },
+                  child: GridView.builder(
+                    key: ValueKey('album-grid-$albumGridCount'),
+                    padding: const EdgeInsets.all(10),
+                    cacheExtent: 1200,
+                    itemCount: widget.images.length,
+                    physics: _isPinching
+                        ? const NeverScrollableScrollPhysics()
+                        : const BouncingScrollPhysics(),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: albumGridCount,
+                      mainAxisSpacing: 6,
+                      crossAxisSpacing: 6,
+                      childAspectRatio: 1,
+                    ),
+                    itemBuilder: (context, index) {
+                      final asset = widget.images[index];
+                      return _AlbumReveal(
+                        order: index,
+                        child: RepaintBoundary(
+                          child: GestureDetector(
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                buildCinematicRoute(
+                                  ViewerScreen(
+                                    images: widget.images,
+                                    index: index,
+                                  ),
+                                ),
+                              );
+                            },
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(18),
+                              child: Hero(
+                                tag: asset.id,
+                                child: buildImageWithSize(asset, albumThumbPx),
                               ),
                             ),
-                          );
-                        },
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(18),
-                          child: Hero(
-                            tag: asset.id,
-                            child: buildImage(asset),
                           ),
                         ),
-                      ),
-                    ),
-                  );
-                },
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget buildImageWithSize(AssetEntity asset, int size) {
+    final id = '${asset.id}@$size';
+    thumbnailNotifiers.putIfAbsent(id, () => ValueNotifier(null));
+
+    final cached = thumbnailCache[id];
+    if (cached != null) {
+      return Image.memory(
+        cached,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.low,
+      );
+    }
+
+    if (!loadingThumbs.contains(id)) {
+      loadingThumbs.add(id);
+      asset.thumbnailDataWithSize(ThumbnailSize(size, size)).then((data) {
+        if (!mounted) return;
+        if (data != null) {
+          thumbnailCache[id] = data;
+          thumbnailNotifiers[id]!.value = data;
+        }
+      }).whenComplete(() {
+        loadingThumbs.remove(id);
+      });
+    }
+
+    return ValueListenableBuilder<Uint8List?>(
+      valueListenable: thumbnailNotifiers[id]!,
+      builder: (context, value, child) {
+        if (value != null) {
+          return Image.memory(
+            value,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.low,
+          );
+        }
+
+        final colorScheme = Theme.of(context).colorScheme;
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                colorScheme.surfaceContainerHighest,
+                colorScheme.surfaceContainer,
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        );
+      },
     );
   }
 }

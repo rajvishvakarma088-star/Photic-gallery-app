@@ -19,9 +19,25 @@ class AlbumSummary {
 class GalleryService {
   List<AssetEntity>? _allImagesCache;
 
+  Future<PermissionState> requestImagePermission() async {
+    return PhotoManager.requestPermissionExtend(
+      requestOption: const PermissionRequestOption(
+        androidPermission: AndroidPermission(
+          type: RequestType.image,
+          mediaLocation: false,
+        ),
+      ),
+    );
+  }
+
   Future<bool> _hasPermission() async {
-    final permission = await PhotoManager.requestPermissionExtend();
-    return permission.isAuth;
+    final permission = await requestImagePermission();
+    // Treat both full and limited gallery access as usable permission.
+    return permission.hasAccess;
+  }
+
+  void clearCache() {
+    _allImagesCache = null;
   }
 
   Future<List<AssetEntity>> fetchImages({
@@ -139,7 +155,24 @@ class GalleryService {
     return images;
   }
 
+  DateTime resolveAssetDate(AssetEntity asset) {
+    final created = asset.createDateTime;
+    if (created.year >= 2000) {
+      return created;
+    }
+
+    final modified = asset.modifiedDateTime;
+    if (modified.year >= 2000) {
+      return modified;
+    }
+
+    return created.isAfter(modified) ? created : modified;
+  }
+
   int compareAssetsByNewestFirst(AssetEntity a, AssetEntity b) {
+    final primaryComparison = resolveAssetDate(b).compareTo(resolveAssetDate(a));
+    if (primaryComparison != 0) return primaryComparison;
+
     final createdComparison = b.createDateTime.compareTo(a.createDateTime);
     if (createdComparison != 0) return createdComparison;
 

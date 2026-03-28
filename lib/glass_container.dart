@@ -5,58 +5,89 @@ class GlassContainer extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final BorderRadius? borderRadius;
+  final bool enableBlur;
+  final double blurSigma;
 
   const GlassContainer({
     super.key,
     required this.child,
     this.padding,
     this.borderRadius,
+    this.enableBlur = true,
+    this.blurSigma = 18,
   });
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final radius = borderRadius ?? BorderRadius.circular(30);
+    final gradientColors = isDark
+        ? [
+            Colors.white.withValues(alpha: 0.12),
+            const Color(0xFF7E5DFF).withValues(alpha: 0.1),
+            const Color(0xFF57B2FF).withValues(alpha: 0.06),
+          ]
+        : [
+            const Color(0xFFF6EEFF).withValues(alpha: 0.9),
+            const Color(0xFFE6D9FF).withValues(alpha: 0.76),
+            const Color(0xFFD8C2FF).withValues(alpha: 0.66),
+          ];
+
+    final glassSurface = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: gradientColors,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: radius,
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.2)
+              : Colors.white.withValues(alpha: 0.74),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7C6EE6)
+                .withValues(alpha: isDark ? 0.16 : 0.12),
+            blurRadius: 30,
+            offset: const Offset(0, 14),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: radius,
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.white.withValues(alpha: isDark ? 0.16 : 0.46),
+                    Colors.white.withValues(alpha: 0),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.center,
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: padding ?? EdgeInsets.zero,
+            child: child,
+          ),
+        ],
+      ),
+    );
 
     return ClipRRect(
       borderRadius: radius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: isDark
-                  ? [
-                      Colors.white.withOpacity(0.12),
-                      const Color(0xFF7C6EE6).withOpacity(0.05),
-                    ]
-                  : [
-                      Colors.white.withOpacity(0.8),
-                      const Color(0xFFEAE5FF).withOpacity(0.28),
-                    ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: radius,
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withOpacity(0.18)
-                  : Colors.white.withOpacity(0.72),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF7C6EE6).withOpacity(
-                  isDark ? 0.1 : 0.08,
-                ),
-                blurRadius: 24,
-                offset: const Offset(0, 14),
-              ),
-            ],
-          ),
-          child: child,
-        ),
-      ),
+      child: enableBlur
+          ? BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+              child: glassSurface,
+            )
+          : glassSurface,
     );
   }
 }
