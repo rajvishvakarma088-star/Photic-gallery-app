@@ -27,7 +27,7 @@ This is a smart gallery app which include.
 - Music player
 - search feature
 - bin 
-- password 
+- pin secure folder 
 
 ## Contributing 
   Feel free to fork this repo and contribute
