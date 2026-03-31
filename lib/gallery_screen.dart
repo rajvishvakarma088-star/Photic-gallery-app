@@ -1,10 +1,17 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:provider/provider.dart';
 import 'album_detail_screen.dart';
+import 'gallery/gallery_album_widgets.dart' as gallery_album_widgets;
+import 'gallery/gallery_grid_widgets.dart' as gallery_grid_widgets;
+import 'gallery/gallery_section.dart';
+import 'gallery/gallery_section_builder.dart';
 import 'glass_container.dart';
+import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
 import 'viewer_screen.dart';
 import 'theme_provider.dart';
@@ -19,103 +26,79 @@ class GalleryScreen extends StatefulWidget {
 class _GalleryScreenState extends State<GalleryScreen>
     with WidgetsBindingObserver {
   final GalleryService service = GalleryService();
+  final FavoritesDatabase favoritesDatabase = FavoritesDatabase.instance;
   final ScrollController scrollController = ScrollController();
+  final ScrollController favoritesScrollController = ScrollController();
   final ScrollController albumsScrollController = ScrollController();
+  final PageStorageKey _galleryScrollKey = const PageStorageKey(
+    'gallery-scroll',
+  );
+  final PageStorageKey _favoritesScrollKey = const PageStorageKey(
+    'favorites-scroll',
+  );
+  List<GallerySection>? _cachedSections;
+  List<AssetEntity>? _cachedSectionSource;
+  int _cachedSectionLength = -1;
 
   List<AssetEntity> images = [];
+  List<AssetEntity> favoriteImages = [];
   List<AlbumSummary> albums = [];
   final Set<String> favorites = {};
   final Set<String> animating = {};
 
-  final Map<String, Uint8List?> thumbnailCache = {};
-  final Map<String, ValueNotifier<Uint8List?>> thumbnailNotifiers = {};
-  final Set<String> loadingThumbs = {};
+  final Map<String, AssetEntityImageProvider> thumbnailProviderCache = {};
+  final Set<String> warmedThumbnailKeys = {};
+  final Set<String> seenThumbnailAssetIds = {};
 
   bool isLoading = true;
+  bool isLoadingFavorites = true;
+  bool isLoadingFavoriteImages = false;
   bool isLoadingMore = false;
   bool isLoadingAlbums = true;
   PermissionState? permissionState;
   bool hasMore = true;
   int currentPage = 0;
   int selectedIndex = 0;
-  static const int pageSize = 120;
+  static const int pageSize = 160;
   static const double pinchStepOutThreshold = 1.07;
   static const double pinchStepInThreshold = 0.93;
   static const int pinchStepCooldownMs = 55;
+  static const double _galleryLoadMoreThreshold = 2600;
   int galleryGridCount = 3;
   double _lastPinchScale = 1.0;
   double _pinchAccumulator = 1.0;
   int _activePointers = 0;
   DateTime _lastGridStepAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _pinchStepConsumed = false;
+  bool _isPrefetchingNextPage = false;
+  bool _isViewerTransitioning = false;
+  List<AssetEntity>? _prefetchedImages;
+  int? _prefetchedPage;
+  Timer? _thumbnailWarmupTimer;
+  int _lastWarmedStart = -1;
+  int _lastWarmedEnd = -1;
 
   bool get _isPinching => _activePointers >= 2;
 
   int get galleryThumbPx {
-    switch (galleryGridCount) {
-      case 2:
-        return 320;
-      case 3:
-        return 220;
-      case 4:
-        return 180;
-      case 5:
-        return 140;
-      default:
-        return 120;
-    }
+    // Keep one stable thumbnail size across grid changes so pinch-to-zoom
+    // reuses the same cached providers instead of triggering a full reload.
+    // Lowered to 180 for smoother scroll performance.
+    return 180;
   }
 
-  List<_GallerySection> buildSections(List<AssetEntity> items) {
+  List<GallerySection> buildSections(List<AssetEntity> items) {
     if (items.isEmpty) return const [];
-
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final yesterday = today.subtract(const Duration(days: 1));
-    final monthNames = const [
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December',
-    ];
-
-    final sections = <_GallerySection>[];
-    String? currentTitle;
-    List<AssetEntity> currentItems = [];
-
-    String titleFor(AssetEntity asset) {
-      final date = service.resolveAssetDate(asset);
-      final day = DateTime(date.year, date.month, date.day);
-      if (day == today) return 'Today';
-      if (day == yesterday) return 'Yesterday';
-      return '${monthNames[date.month - 1]} ${date.year}';
+    if (identical(_cachedSectionSource, items) &&
+        _cachedSectionLength == items.length &&
+        _cachedSections != null) {
+      return _cachedSections!;
     }
+    final sections = buildGallerySections(items, service.resolveAssetDate);
 
-    for (final asset in items) {
-      final title = titleFor(asset);
-      if (currentTitle != title) {
-        if (currentTitle != null) {
-          sections.add(_GallerySection(title: currentTitle, items: currentItems));
-        }
-        currentTitle = title;
-        currentItems = [asset];
-      } else {
-        currentItems.add(asset);
-      }
-    }
-
-    if (currentTitle != null) {
-      sections.add(_GallerySection(title: currentTitle, items: currentItems));
-    }
-
+    _cachedSectionSource = items;
+    _cachedSectionLength = items.length;
+    _cachedSections = sections;
     return sections;
   }
 
@@ -124,18 +107,18 @@ class _GalleryScreenState extends State<GalleryScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     scrollController.addListener(onScroll);
-    loadAlbums();
-    loadImages();
+    loadFavorites();
+    unawaited(loadInitialMediaData());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _thumbnailWarmupTimer?.cancel();
+    thumbnailProviderCache.clear();
     scrollController.dispose();
+    favoritesScrollController.dispose();
     albumsScrollController.dispose();
-    for (final notifier in thumbnailNotifiers.values) {
-      notifier.dispose();
-    }
     super.dispose();
   }
 
@@ -143,24 +126,162 @@ class _GalleryScreenState extends State<GalleryScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
     service.clearCache();
-    loadAlbums();
-    loadImages();
+    loadFavorites();
+    unawaited(loadInitialMediaData());
   }
 
-  Future<void> loadImages({bool loadMore = false}) async {
+  Future<void> loadInitialMediaData() async {
+    final permission = await service.requestImagePermission();
+    if (!mounted) return;
+
+    if (!permission.hasAccess) {
+      setState(() {
+        permissionState = permission;
+        images = [];
+        albums = [];
+        isLoading = false;
+        isLoadingMore = false;
+        isLoadingAlbums = false;
+        hasMore = false;
+      });
+      return;
+    }
+
+    permissionState = permission;
+
+    await Future.wait([
+      loadAlbums(permissionOverride: permission),
+      loadImages(permissionOverride: permission),
+    ]);
+  }
+
+  Future<void> loadFavorites() async {
+    try {
+      final data = await favoritesDatabase.loadFavoriteIds();
+      if (!mounted) return;
+
+      setState(() {
+        favorites
+          ..clear()
+          ..addAll(data);
+        isLoadingFavorites = false;
+      });
+
+      await syncFavoriteImages();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        favorites.clear();
+        favoriteImages = [];
+        isLoadingFavorites = false;
+        isLoadingFavoriteImages = false;
+      });
+    }
+  }
+
+  Future<void> syncFavoriteImages() async {
+    if (favorites.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        favoriteImages = [];
+        isLoadingFavoriteImages = false;
+      });
+      return;
+    }
+
+    setState(() => isLoadingFavoriteImages = true);
+    final data = await service.fetchImagesByIds(favorites);
+    if (!mounted) return;
+
+    setState(() {
+      favoriteImages = data;
+      isLoadingFavoriteImages = false;
+    });
+  }
+
+  Future<void> toggleFavorite(AssetEntity asset) async {
+    final assetId = asset.id;
+    final wasFavorite = favorites.contains(assetId);
+
+    setState(() {
+      if (wasFavorite) {
+        favorites.remove(assetId);
+        animating.remove(assetId);
+        favoriteImages.removeWhere((item) => item.id == assetId);
+      } else {
+        favorites.add(assetId);
+        animating.add(assetId);
+        favoriteImages = [...favoriteImages, asset]
+          ..sort(service.compareAssetsByNewestFirst);
+      }
+    });
+
+    if (!wasFavorite) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (!mounted) return;
+        setState(() {
+          animating.remove(assetId);
+        });
+      });
+    }
+
+    try {
+      if (wasFavorite) {
+        await favoritesDatabase.removeFavorite(assetId);
+      } else {
+        await favoritesDatabase.addFavorite(assetId);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        if (wasFavorite) {
+          favorites.add(assetId);
+          favoriteImages = [...favoriteImages, asset]
+            ..sort(service.compareAssetsByNewestFirst);
+        } else {
+          favorites.remove(assetId);
+          animating.remove(assetId);
+          favoriteImages.removeWhere((item) => item.id == assetId);
+        }
+      });
+    }
+  }
+
+  Future<void> loadImages({
+    bool loadMore = false,
+    PermissionState? permissionOverride,
+  }) async {
     if (loadMore) {
       if (isLoadingMore || isLoading || !hasMore || selectedIndex != 0) {
         return;
       }
+
+      final nextPage = currentPage + 1;
+      if (_prefetchedPage == nextPage && _prefetchedImages != null) {
+        final prefetched = _prefetchedImages!;
+        setState(() {
+          images.addAll(prefetched);
+          currentPage = nextPage;
+          hasMore = prefetched.length == pageSize;
+        });
+        _prefetchedImages = null;
+        _prefetchedPage = null;
+        unawaited(_prefetchNextImages());
+        return;
+      }
+
       setState(() => isLoadingMore = true);
     } else {
       setState(() => isLoading = true);
       currentPage = 0;
       hasMore = true;
+      _prefetchedImages = null;
+      _prefetchedPage = null;
     }
 
     if (!loadMore) {
-      final permission = await service.requestImagePermission();
+      final permission =
+          permissionOverride ?? await service.requestImagePermission();
       if (!mounted) return;
 
       if (!permission.hasAccess) {
@@ -188,22 +309,57 @@ class _GalleryScreenState extends State<GalleryScreen>
     setState(() {
       if (loadMore) {
         images.addAll(data);
-        images.sort(service.compareAssetsByNewestFirst);
         isLoadingMore = false;
         currentPage = nextPage;
         hasMore = data.length == pageSize;
       } else {
         images = data;
-        images.sort(service.compareAssetsByNewestFirst);
         isLoading = false;
         currentPage = data.isEmpty ? 0 : nextPage;
         hasMore = data.length == pageSize;
       }
     });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scheduleThumbnailWarmup();
+    });
+    unawaited(_prefetchNextImages());
   }
 
-  Future<void> loadAlbums() async {
-    final permission = await service.requestImagePermission();
+  Future<void> _prefetchNextImages() async {
+    if (!mounted ||
+        _isPrefetchingNextPage ||
+        _isViewerTransitioning ||
+        isLoading ||
+        isLoadingMore ||
+        !hasMore ||
+        selectedIndex != 0) {
+      return;
+    }
+
+    final targetPage = currentPage + 1;
+    if (_prefetchedPage == targetPage && _prefetchedImages != null) return;
+
+    _isPrefetchingNextPage = true;
+    try {
+      final data = await service.fetchImages(
+        page: targetPage,
+        size: pageSize,
+      );
+      if (!mounted || selectedIndex != 0) return;
+      _prefetchedImages = data;
+      _prefetchedPage = targetPage;
+    } finally {
+      _isPrefetchingNextPage = false;
+    }
+  }
+
+  Future<void> loadAlbums({
+    PermissionState? permissionOverride,
+  }) async {
+    final permission =
+        permissionOverride ?? await service.requestImagePermission();
     if (!mounted) return;
     if (!permission.hasAccess) {
       setState(() {
@@ -225,11 +381,87 @@ class _GalleryScreenState extends State<GalleryScreen>
   }
 
   void onScroll() {
-    if (!scrollController.hasClients || isLoading || isLoadingMore) return;
+    if (!scrollController.hasClients ||
+        isLoading ||
+        isLoadingMore ||
+        _isViewerTransitioning) {
+      return;
+    }
 
     final position = scrollController.position;
-    if (position.pixels > position.maxScrollExtent - 800) {
+    if (position.pixels > position.maxScrollExtent - _galleryLoadMoreThreshold) {
       loadImages(loadMore: true);
+    }
+
+  }
+
+  ImageProvider<Object> _thumbnailProviderFor(
+    AssetEntity asset,
+    int thumbPx,
+  ) {
+    final id = '${asset.id}@$thumbPx';
+    return thumbnailProviderCache.putIfAbsent(
+      id,
+      () => AssetEntityImageProvider(
+        asset,
+        isOriginal: false,
+        thumbnailSize: ThumbnailSize.square(thumbPx),
+        thumbnailFormat: ThumbnailFormat.jpeg,
+      ),
+    );
+  }
+
+
+  void _scheduleThumbnailWarmup() {
+    if (!mounted ||
+        selectedIndex != 0 ||
+        images.isEmpty ||
+        _isViewerTransitioning) {
+      return;
+    }
+
+    _thumbnailWarmupTimer?.cancel();
+    _thumbnailWarmupTimer = Timer(const Duration(milliseconds: 70), () {
+      if (!mounted) return;
+      _warmVisibleThumbnailBand();
+    });
+  }
+
+  void _warmVisibleThumbnailBand() {
+    if (!mounted ||
+        !scrollController.hasClients ||
+        selectedIndex != 0 ||
+        _isViewerTransitioning ||
+        images.isEmpty) {
+      return;
+    }
+
+    final viewportWidth = MediaQuery.of(context).size.width;
+    final contentWidth =
+        (viewportWidth - 20 - ((galleryGridCount - 1) * 6)).clamp(120.0, 4000.0);
+    final tileExtent = (contentWidth / galleryGridCount) + 6;
+    final effectiveOffset =
+        (scrollController.offset - 54).clamp(0.0, double.infinity);
+    final firstVisibleRow = (effectiveOffset / tileExtent).floor();
+    final visibleRows =
+        ((scrollController.position.viewportDimension / tileExtent).ceil() + 2)
+            .clamp(4, 14);
+    final startIndex = ((firstVisibleRow - 4) * galleryGridCount)
+        .clamp(0, images.length);
+    final endIndex = ((firstVisibleRow + visibleRows + 7) * galleryGridCount)
+        .clamp(0, images.length);
+
+    if (startIndex == _lastWarmedStart && endIndex == _lastWarmedEnd) return;
+    _lastWarmedStart = startIndex;
+    _lastWarmedEnd = endIndex;
+
+    for (var i = startIndex; i < endIndex; i++) {
+      seenThumbnailAssetIds.add(images[i].id);
+      warmedThumbnailKeys.add('${images[i].id}@$galleryThumbPx');
+      precacheImage(
+        _thumbnailProviderFor(images[i], galleryThumbPx),
+        context,
+      );
     }
   }
 
@@ -238,63 +470,45 @@ class _GalleryScreenState extends State<GalleryScreen>
     int thumbPx = 220,
   }) {
     final id = '${asset.id}@$thumbPx';
+    final placeholder = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Theme.of(context).colorScheme.surfaceContainerHighest,
+            Theme.of(context).colorScheme.surfaceContainer,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+    );
 
-    thumbnailNotifiers.putIfAbsent(id, () => ValueNotifier(null));
+    final isWarm =
+        warmedThumbnailKeys.contains(id) || seenThumbnailAssetIds.contains(asset.id);
 
-    final cached = thumbnailCache[id];
-    if (cached != null) {
-          return Image.memory(
-            cached,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-            filterQuality: FilterQuality.low,
-          );
-        }
-
-    if (!loadingThumbs.contains(id)) {
-      loadingThumbs.add(id);
-      asset
-          .thumbnailDataWithSize(
-            ThumbnailSize(thumbPx, thumbPx),
-          )
-          .then((data) {
-        if (!mounted) return;
-
-        if (data != null) {
-          thumbnailCache[id] = data;
-          thumbnailNotifiers[id]!.value = data;
-        }
-      }).whenComplete(() {
-        loadingThumbs.remove(id);
-      });
+    if (!isWarm && Scrollable.recommendDeferredLoadingForContext(context)) {
+      return placeholder;
     }
 
-    return ValueListenableBuilder<Uint8List?>(
-      valueListenable: thumbnailNotifiers[id]!,
-      builder: (context, value, child) {
-        if (value != null) {
-          return Image.memory(
-            value,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-            filterQuality: FilterQuality.low,
-          );
+    seenThumbnailAssetIds.add(asset.id);
+    warmedThumbnailKeys.add(id);
+    final provider = _thumbnailProviderFor(asset, thumbPx);
+
+    return Image(
+      image: provider,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.none,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded || frame != null) {
+          return child;
         }
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                Theme.of(context).colorScheme.surfaceContainerHighest,
-                Theme.of(context).colorScheme.surfaceContainer,
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-        );
+        return placeholder;
       },
+      errorBuilder: (context, error, stackTrace) => placeholder,
     );
   }
+
 
   Widget buildBottomBar(BuildContext context, bool isDark) {
     return GlassContainer(
@@ -334,28 +548,22 @@ class _GalleryScreenState extends State<GalleryScreen>
 
   Route<T> buildCinematicRoute<T>(Widget page) {
     return PageRouteBuilder<T>(
-      transitionDuration: const Duration(milliseconds: 520),
-      reverseTransitionDuration: const Duration(milliseconds: 380),
+      opaque: false,
+      transitionDuration: const Duration(milliseconds: 360),
+      reverseTransitionDuration: const Duration(milliseconds: 360),
       pageBuilder: (context, animation, secondaryAnimation) => page,
       transitionsBuilder: (context, animation, secondaryAnimation, child) {
-        final curved = CurvedAnimation(
+        final curve = CurvedAnimation(
           parent: animation,
           curve: Curves.easeOutCubic,
           reverseCurve: Curves.easeInCubic,
         );
-
-        return FadeTransition(
-          opacity: curved,
-          child: SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(0.035, 0.02),
-              end: Offset.zero,
-            ).animate(curved),
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.985, end: 1).animate(curved),
-              child: child,
-            ),
-          ),
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(1.0, 0.0),
+            end: Offset.zero,
+          ).animate(curve),
+          child: child,
         );
       },
     );
@@ -372,36 +580,6 @@ class _GalleryScreenState extends State<GalleryScreen>
           title: album.name,
           images: albumImages,
         ),
-      ),
-    );
-  }
-
-  Widget buildStatsChip({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required Color textColor,
-  }) {
-    return Container(
-      key: ValueKey(label),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: textColor),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: TextStyle(
-              color: textColor,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -474,13 +652,13 @@ class _GalleryScreenState extends State<GalleryScreen>
                       spacing: 10,
                       runSpacing: 10,
                       children: [
-                        buildStatsChip(
+                        gallery_album_widgets.buildGalleryStatsChip(
                           icon: Icons.folder_open_rounded,
                           label: '${albums.length} folders',
                           color: colorScheme.primaryContainer.withOpacity(0.9),
                           textColor: colorScheme.onPrimaryContainer,
                         ),
-                        buildStatsChip(
+                        gallery_album_widgets.buildGalleryStatsChip(
                           icon: Icons.photo_library_rounded,
                           label:
                               '${albums.fold<int>(0, (sum, album) => sum + album.count)} photos',
@@ -537,10 +715,12 @@ class _GalleryScreenState extends State<GalleryScreen>
                 itemBuilder: (context, index) {
                   final album = featuredAlbums[index];
                   return RepaintBoundary(
-                    child: buildFeaturedAlbumCard(
+                    child: gallery_album_widgets.buildFeaturedAlbumCard(
                       album: album,
                       colorScheme: colorScheme,
                       isDark: isDark,
+                      buildImage: buildImage,
+                      onTap: () => openAlbum(album),
                     ),
                   );
                 },
@@ -571,10 +751,11 @@ class _GalleryScreenState extends State<GalleryScreen>
                     bottom: index == otherAlbums.length - 1 ? 0 : 12,
                   ),
                   child: RepaintBoundary(
-                    child: buildAlbumListTile(
+                    child: gallery_album_widgets.buildAlbumListTile(
                       album: album,
                       colorScheme: colorScheme,
-                      isDark: isDark,
+                      buildImage: buildImage,
+                      onTap: () => openAlbum(album),
                     ),
                   ),
                 );
@@ -587,158 +768,72 @@ class _GalleryScreenState extends State<GalleryScreen>
     );
   }
 
-  Widget buildFeaturedAlbumCard({
-    required AlbumSummary album,
-    required ColorScheme colorScheme,
-    required bool isDark,
-  }) {
-    return GestureDetector(
-      onTap: () => openAlbum(album),
-      child: SizedBox(
-        width: 176,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(28),
-                child: album.coverAsset != null
-                    ? buildImage(album.coverAsset!, thumbPx: 180)
-                    : Container(color: colorScheme.surfaceContainerHigh),
-              ),
-            ),
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(28),
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.transparent,
-                      Colors.black.withOpacity(isDark ? 0.44 : 0.4),
-                    ],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 14,
-              left: 14,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.28),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: const Text(
-                  'Featured',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    album.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${album.count} photos',
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.86),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget buildGridTile(
+    AssetEntity asset,
+    List<AssetEntity> visibleImages,
+    int absoluteIndex,
+  ) {
+    final ImageProvider<Object>? previewProvider =
+        _thumbnailProviderFor(asset, galleryThumbPx);
+    final openingProvider = ViewerScreen.openingImageProvider(context, asset);
 
-  Widget buildAlbumListTile({
-    required AlbumSummary album,
-    required ColorScheme colorScheme,
-    required bool isDark,
-  }) {
-    return GestureDetector(
-      onTap: () => openAlbum(album),
-      child: GlassContainer(
-        borderRadius: BorderRadius.circular(26),
-        enableBlur: false,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: SizedBox(
-                  width: 74,
-                  height: 74,
-                  child: album.coverAsset != null
-                      ? buildImage(album.coverAsset!, thumbPx: 96)
-                      : Container(color: colorScheme.surfaceContainerHigh),
-                ),
+    return RepaintBoundary(
+      child: GestureDetector(
+        onTap: () async {
+          _thumbnailWarmupTimer?.cancel();
+          _isViewerTransitioning = true;
+          // Warm up both preview and opening providers so the transition is smooth.
+          if (previewProvider != null) {
+            unawaited(precacheImage(previewProvider, context));
+          }
+          unawaited(precacheImage(openingProvider, context));
+
+          await Navigator.push(
+            context,
+            buildCinematicRoute(
+              ViewerScreen(
+                images: visibleImages,
+                index: absoluteIndex,
+                initialPreviewProvider: previewProvider,
+                initialViewerProvider: openingProvider,
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      album.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: colorScheme.onSurface,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '${album.count} images',
-                      style: TextStyle(
-                        color: colorScheme.onSurface.withOpacity(0.68),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
+            ),
+          );
+          if (!mounted) return;
+          _isViewerTransitioning = false;
+          _scheduleThumbnailWarmup();
+        },
+        onDoubleTap: () {
+          toggleFavorite(asset);
+        },
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Hero(
+                tag: asset.id,
+                child: buildImage(asset, thumbPx: galleryThumbPx),
               ),
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: colorScheme.primaryContainer.withOpacity(0.92),
-                  borderRadius: BorderRadius.circular(14),
-                ),
+            ),
+            if (favorites.contains(asset.id))
+              const Positioned(
+                top: 8,
+                right: 8,
                 child: Icon(
-                  Icons.chevron_right_rounded,
-                  color: colorScheme.onPrimaryContainer,
+                  Icons.favorite,
+                  color: Colors.red,
                 ),
               ),
-            ],
-          ),
+            if (animating.contains(asset.id))
+              const Center(
+                child: Icon(
+                  Icons.favorite,
+                  color: Colors.white,
+                  size: 60,
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -747,11 +842,48 @@ class _GalleryScreenState extends State<GalleryScreen>
   Widget buildGridView(
     List<AssetEntity> visibleImages,
     ColorScheme colorScheme,
+    ScrollController controller,
   ) {
     final sections = buildSections(visibleImages);
     final indexByAssetId = <String, int>{
       for (var i = 0; i < visibleImages.length; i++) visibleImages[i].id: i,
     };
+
+    final slivers = <Widget>[
+      for (var sectionIndex = 0; sectionIndex < sections.length; sectionIndex++)
+        ...[
+          SliverToBoxAdapter(
+            child: gallery_grid_widgets.buildGallerySectionHeader(
+              sections[sectionIndex],
+              colorScheme,
+              sectionIndex == 0,
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.only(top: 6),
+            sliver: SliverGrid(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final asset = sections[sectionIndex].items[index];
+                  final absoluteIndex = indexByAssetId[asset.id] ?? 0;
+                  return buildGridTile(
+                    asset,
+                    visibleImages,
+                    absoluteIndex,
+                  );
+                },
+                childCount: sections[sectionIndex].items.length,
+              ),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: galleryGridCount,
+                mainAxisSpacing: 6,
+                crossAxisSpacing: 6,
+                childAspectRatio: 1,
+              ),
+            ),
+          ),
+        ],
+    ];
 
     return Listener(
       onPointerDown: (_) {
@@ -819,6 +951,10 @@ class _GalleryScreenState extends State<GalleryScreen>
             galleryGridCount = nextCount;
             _lastGridStepAt = now;
           });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _scheduleThumbnailWarmup();
+          });
           _pinchStepConsumed = true;
         },
         onScaleEnd: (details) {
@@ -826,207 +962,58 @@ class _GalleryScreenState extends State<GalleryScreen>
           _pinchAccumulator = 1.0;
           _pinchStepConsumed = false;
         },
-        child: CustomScrollView(
-          controller: scrollController,
-          cacheExtent: 900,
-          physics: _isPinching
-              ? const NeverScrollableScrollPhysics()
-              : const BouncingScrollPhysics(),
-          slivers: [
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(10, 2, 10, 110),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, sectionIndex) {
-                if (sectionIndex >= sections.length) {
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: SizedBox(
-                      height: 88,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: colorScheme.surface.withOpacity(0.45),
-                          borderRadius: BorderRadius.circular(20),
+        child: Stack(
+          children: [
+            CustomScrollView(
+              key: controller == scrollController
+                  ? _galleryScrollKey
+                  : _favoritesScrollKey,
+              controller: controller,
+              cacheExtent: 600,
+              physics: _isPinching
+                  ? const NeverScrollableScrollPhysics()
+                  : const BouncingScrollPhysics(),
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(10, 2, 10, 110),
+                  sliver: SliverMainAxisGroup(slivers: slivers),
+                ),
+              ],
+            ),
+            if (isLoadingMore && controller == scrollController)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 116,
+                child: IgnorePointer(
+                  child: Center(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: colorScheme.surface.withOpacity(0.88),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.18),
                         ),
-                        child: Center(
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
                           child: CircularProgressIndicator(
-                            strokeWidth: 2.5,
+                            strokeWidth: 2.4,
                             color: colorScheme.primary,
                           ),
                         ),
                       ),
                     ),
-                  );
-                }
-
-                  final section = sections[sectionIndex];
-                  final isFirstSection = sectionIndex == 0;
-                  return Transform.translate(
-                    offset: Offset(0, isFirstSection ? 0 : -18),
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
-                            child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: colorScheme.surface.withOpacity(0.28),
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: Colors.white.withOpacity(0.22),
-                                ),
-                              ),
-                              child: Text(
-                                section.title,
-                                style: TextStyle(
-                                  color: colorScheme.onSurface,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: -0.1,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 9,
-                                vertical: 5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: colorScheme.primaryContainer
-                                    .withOpacity(0.56),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                '${section.items.length}',
-                                style: TextStyle(
-                                  color: colorScheme.onPrimaryContainer,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Container(
-                                height: 1,
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: [
-                                      colorScheme.primary.withOpacity(0.16),
-                                      colorScheme.primary.withOpacity(0.02),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                            ),
-                          ),
-                          GridView.builder(
-                            key: ValueKey('grid-${section.title}-$galleryGridCount'),
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: section.items.length,
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: galleryGridCount,
-                              mainAxisSpacing: 6,
-                              crossAxisSpacing: 6,
-                              childAspectRatio: 1,
-                            ),
-                            itemBuilder: (context, index) {
-                              final asset = section.items[index];
-                              final absoluteIndex =
-                                  indexByAssetId[asset.id] ?? 0;
-
-                              return RepaintBoundary(
-                                child: GestureDetector(
-                                  onTap: () {
-                                    Navigator.push(
-                                      context,
-                                      buildCinematicRoute(
-                                        ViewerScreen(
-                                          images: visibleImages,
-                                          index: absoluteIndex,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  onDoubleTap: () {
-                                    final id = asset.id;
-
-                                    setState(() {
-                                      if (favorites.contains(id)) {
-                                        favorites.remove(id);
-                                      } else {
-                                        favorites.add(id);
-                                        animating.add(id);
-                                      }
-                                    });
-
-                                    Future.delayed(
-                                      const Duration(milliseconds: 500),
-                                      () {
-                                        if (mounted) {
-                                          setState(() {
-                                            animating.remove(id);
-                                          });
-                                        }
-                                      },
-                                    );
-                                  },
-                                  child: Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(16),
-                                        child: buildImage(
-                                          asset,
-                                          thumbPx: galleryThumbPx,
-                                        ),
-                                      ),
-                                      if (favorites.contains(asset.id))
-                                        const Positioned(
-                                          top: 8,
-                                          right: 8,
-                                          child: Icon(
-                                            Icons.favorite,
-                                            color: Colors.red,
-                                          ),
-                                        ),
-                                      if (animating.contains(asset.id))
-                                        const Center(
-                                          child: Icon(
-                                            Icons.favorite,
-                                            color: Colors.white,
-                                            size: 60,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-                childCount: sections.length + (isLoadingMore ? 1 : 0),
+                  ),
+                ),
               ),
-            ),
-          ),
-        ],
+          ],
         ),
       ),
     );
@@ -1043,7 +1030,7 @@ class _GalleryScreenState extends State<GalleryScreen>
         child: buildAlbumsView(colorScheme, isDark),
       );
     }
-    if (isLoading) {
+    if (isLoading || (selectedIndex == 2 && isLoadingFavoriteImages)) {
       return const KeyedSubtree(
         key: ValueKey('loading'),
         child: Center(child: CircularProgressIndicator()),
@@ -1093,8 +1080,7 @@ class _GalleryScreenState extends State<GalleryScreen>
                 TextButton(
                   onPressed: () {
                     service.clearCache();
-                    loadAlbums();
-                    loadImages();
+                    unawaited(loadInitialMediaData());
                   },
                   child: const Text('Retry'),
                 ),
@@ -1120,8 +1106,12 @@ class _GalleryScreenState extends State<GalleryScreen>
       );
     }
     return KeyedSubtree(
-      key: ValueKey('grid-$selectedIndex-${visibleImages.length}'),
-      child: buildGridView(visibleImages, colorScheme),
+      key: ValueKey('grid-$selectedIndex'),
+      child: buildGridView(
+        visibleImages,
+        colorScheme,
+        selectedIndex == 2 ? favoritesScrollController : scrollController,
+      ),
     );
   }
 
@@ -1134,9 +1124,7 @@ class _GalleryScreenState extends State<GalleryScreen>
         isDark ? const Color(0xFF120C24) : const Color(0xFFF1E8FF);
     final titles = ['Gallery', 'Albums', 'Favorites'];
     final visibleImages = selectedIndex == 2
-        ? images
-            .where((asset) => favorites.contains(asset.id))
-            .toList(growable: false)
+        ? favoriteImages
         : images;
 
     final overlayStyle = isDark
@@ -1271,14 +1259,4 @@ class _GalleryScreenState extends State<GalleryScreen>
       ),
     );
   }
-}
-
-class _GallerySection {
-  const _GallerySection({
-    required this.title,
-    required this.items,
-  });
-
-  final String title;
-  final List<AssetEntity> items;
 }

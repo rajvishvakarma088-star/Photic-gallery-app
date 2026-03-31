@@ -17,7 +17,13 @@ class AlbumSummary {
 }
 
 class GalleryService {
-  List<AssetEntity>? _allImagesCache;
+  AssetPathEntity? _allPhotosPathCache;
+  final FilterOptionGroup _galleryFilter = FilterOptionGroup(
+    orders: const [
+      OrderOption(type: OrderOptionType.createDate, asc: false),
+      OrderOption(type: OrderOptionType.updateDate, asc: false),
+    ],
+  );
 
   Future<PermissionState> requestImagePermission() async {
     return PhotoManager.requestPermissionExtend(
@@ -37,7 +43,7 @@ class GalleryService {
   }
 
   void clearCache() {
-    _allImagesCache = null;
+    _allPhotosPathCache = null;
   }
 
   Future<List<AssetEntity>> fetchImages({
@@ -45,61 +51,12 @@ class GalleryService {
     int size = 120,
   }) async {
     if (!await _hasPermission()) return [];
+    final allPhotos = await _getAllPhotosPath();
+    if (allPhotos == null) return [];
 
-    final allImages = await _loadAllImages();
-    final start = page * size;
-    if (start >= allImages.length) {
-      return [];
-    }
-
-    final end = start + size > allImages.length
-        ? allImages.length
-        : start + size;
-    return allImages.sublist(start, end);
-  }
-
-  Future<List<AssetEntity>> _loadAllImages() async {
-    if (_allImagesCache != null) {
-      return _allImagesCache!;
-    }
-
-    final albums = await PhotoManager.getAssetPathList(
-      type: RequestType.image,
-      hasAll: true,
-    );
-
-    if (albums.isEmpty) {
-      _allImagesCache = <AssetEntity>[];
-      return _allImagesCache!;
-    }
-
-    final allImages = <AssetEntity>[];
-    final seenIds = <String>{};
-
-    for (final album in albums) {
-      int currentPage = 0;
-
-      while (true) {
-        final batch = await album.getAssetListPaged(
-          page: currentPage,
-          size: 200,
-        );
-
-        if (batch.isEmpty) break;
-
-        for (final asset in batch) {
-          if (seenIds.add(asset.id)) {
-            allImages.add(asset);
-          }
-        }
-
-        currentPage++;
-      }
-    }
-
-    allImages.sort(compareAssetsByNewestFirst);
-    _allImagesCache = allImages;
-    return allImages;
+    final images = await allPhotos.getAssetListPaged(page: page, size: size);
+    images.sort(compareAssetsByNewestFirst);
+    return images;
   }
 
   Future<List<AlbumSummary>> fetchAlbums() async {
@@ -108,6 +65,7 @@ class GalleryService {
     final albums = await PhotoManager.getAssetPathList(
       type: RequestType.image,
       hasAll: true,
+      filterOption: _galleryFilter,
     );
 
     final summaries = <AlbumSummary>[];
@@ -153,6 +111,38 @@ class GalleryService {
     final images = await album.getAssetListPaged(page: page, size: size);
     images.sort(compareAssetsByNewestFirst);
     return images;
+  }
+
+  Future<List<AssetEntity>> fetchImagesByIds(Set<String> assetIds) async {
+    if (assetIds.isEmpty || !await _hasPermission()) return [];
+
+    final matches = await Future.wait(
+      assetIds.map(AssetEntity.fromId),
+    );
+
+    final validMatches = matches
+        .whereType<AssetEntity>()
+        .toList(growable: false);
+    validMatches.sort(compareAssetsByNewestFirst);
+    return validMatches;
+  }
+
+  Future<AssetPathEntity?> _getAllPhotosPath() async {
+    final cached = _allPhotosPathCache;
+    if (cached != null) return cached;
+
+    final albums = await PhotoManager.getAssetPathList(
+      type: RequestType.image,
+      hasAll: true,
+      filterOption: _galleryFilter,
+    );
+    if (albums.isEmpty) return null;
+
+    _allPhotosPathCache = albums.firstWhere(
+      (album) => album.isAll,
+      orElse: () => albums.first,
+    );
+    return _allPhotosPathCache;
   }
 
   DateTime resolveAssetDate(AssetEntity asset) {

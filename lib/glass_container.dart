@@ -14,7 +14,7 @@ class GlassContainer extends StatelessWidget {
     this.padding,
     this.borderRadius,
     this.enableBlur = true,
-    this.blurSigma = 18,
+    this.blurSigma = 10,
   });
 
   @override
@@ -49,9 +49,9 @@ class GlassContainer extends StatelessWidget {
         boxShadow: [
           BoxShadow(
             color: const Color(0xFF7C6EE6)
-                .withValues(alpha: isDark ? 0.16 : 0.12),
-            blurRadius: 30,
-            offset: const Offset(0, 14),
+                .withValues(alpha: isDark ? 0.1 : 0.08),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
@@ -80,14 +80,19 @@ class GlassContainer extends StatelessWidget {
       ),
     );
 
-    return ClipRRect(
-      borderRadius: radius,
-      child: enableBlur
-          ? BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-              child: glassSurface,
-            )
-          : glassSurface,
+    return RepaintBoundary(
+      child: ClipRRect(
+        borderRadius: radius,
+        child: enableBlur
+            ? BackdropFilter(
+                filter: ImageFilter.blur(
+                  sigmaX: blurSigma,
+                  sigmaY: blurSigma,
+                ),
+                child: glassSurface,
+              )
+            : glassSurface,
+      ),
     );
   }
 }

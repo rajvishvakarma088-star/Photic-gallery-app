@@ -5,6 +5,10 @@ import 'theme_provider.dart';
 import 'gallery_screen.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  PaintingBinding.instance.imageCache.maximumSize = 320;
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 160 << 20;
+
   runApp(
     ChangeNotifierProvider(
       create: (_) => ThemeProvider(),

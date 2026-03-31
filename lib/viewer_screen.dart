@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,12 +12,32 @@ import 'glass_container.dart';
 class ViewerScreen extends StatefulWidget {
   final List<AssetEntity> images;
   final int index;
+  final ImageProvider? initialPreviewProvider;
+  final AssetEntityImageProvider? initialViewerProvider;
 
   const ViewerScreen({
     super.key,
     required this.images,
     required this.index,
+    this.initialPreviewProvider,
+    this.initialViewerProvider,
   });
+
+  static ThumbnailSize openingThumbnailSize(BuildContext context) {
+    return const ThumbnailSize.square(320);
+  }
+
+  static AssetEntityImageProvider openingImageProvider(
+    BuildContext context,
+    AssetEntity asset,
+  ) {
+    return AssetEntityImageProvider(
+      asset,
+      isOriginal: false,
+      thumbnailSize: const ThumbnailSize.square(800),
+      thumbnailFormat: ThumbnailFormat.jpeg,
+    );
+  }
 
   @override
   State<ViewerScreen> createState() => _ViewerScreenState();
@@ -26,18 +47,22 @@ class _ViewerScreenState extends State<ViewerScreen> {
   late PageController controller;
   final ScrollController thumbnailScrollController = ScrollController();
   final ValueNotifier<int> currentIndexNotifier = ValueNotifier<int>(0);
+  final ValueNotifier<double> verticalDragNotifier = ValueNotifier<double>(0);
+  final ValueNotifier<double> upwardDragNotifier = ValueNotifier<double>(0);
   final Map<String, AssetEntityImageProvider> providerCache = {};
   final Map<String, AssetEntityImageProvider> stripProviderCache = {};
+  final Map<String, Future<String>> fileSizeLabelCache = {};
   final Set<String> warmedViewerAssetIds = {};
+  final Set<String> highQualityReadyAssetIds = {};
   Timer? thumbnailStripTimer;
+  Timer? deferredNeighborWarmupTimer;
   bool isInteractingWithStrip = false;
 
-  double verticalDrag = 0;
-  double upwardDrag = 0;
   double detailsDrag = 0;
   bool showDetails = false;
   bool showThumbnailStrip = true;
   int currentIndex = 0;
+  Brightness? _lastAppliedBrightness;
 
   final PhotoViewController photoController = PhotoViewController();
   static const double detailsSheetHeight = 316;
@@ -46,14 +71,29 @@ class _ViewerScreenState extends State<ViewerScreen> {
   static const double thumbnailSpacing = 8;
 
   double get dismissProgress =>
-      (verticalDrag / 220).clamp(0.0, 1.0);
+      (verticalDragNotifier.value / 220).clamp(0.0, 1.0);
+
+  ImageProvider currentPageImageProvider(AssetEntity asset, int index) {
+    final previewProvider = widget.initialPreviewProvider;
+    final isInitialPage = index == widget.index;
+    final isPreviewStillNeeded =
+        isInitialPage &&
+        previewProvider != null &&
+        !highQualityReadyAssetIds.contains(asset.id);
+
+    if (isPreviewStillNeeded) {
+      return previewProvider;
+    }
+
+    return viewerImageProvider(asset);
+  }
 
   AssetEntityImageProvider viewerImageProvider(AssetEntity asset) {
     return providerCache.putIfAbsent(asset.id, () {
       return AssetEntityImageProvider(
         asset,
         isOriginal: false,
-        thumbnailSize: const ThumbnailSize(1800, 1800),
+        thumbnailSize: const ThumbnailSize(2000, 2000),
         thumbnailFormat: ThumbnailFormat.jpeg,
       );
     });
@@ -75,28 +115,51 @@ class _ViewerScreenState extends State<ViewerScreen> {
     final asset = widget.images[index];
     if (!warmedViewerAssetIds.add(asset.id)) return;
 
-    precacheImage(
-      viewerImageProvider(asset),
-      context,
-    );
+    precacheImage(viewerImageProvider(asset), context).then((_) {
+      if (!mounted) return;
+      if (highQualityReadyAssetIds.add(asset.id)) {
+        setState(() {});
+      }
+    });
   }
 
   void warmUpVisibleImages(int centerIndex) {
-    for (int offset = -3; offset <= 3; offset++) {
+    for (int offset = -1; offset <= 1; offset++) {
       precacheViewerImage(centerIndex + offset);
     }
+  }
+
+  void warmCurrentThenNeighbors(int centerIndex) {
+    precacheViewerImage(centerIndex);
+    deferredNeighborWarmupTimer?.cancel();
+    deferredNeighborWarmupTimer = Timer(
+      const Duration(milliseconds: 120),
+      () {
+        if (!mounted) return;
+        precacheViewerImage(centerIndex - 1);
+        precacheViewerImage(centerIndex + 1);
+      },
+    );
   }
 
   void syncThumbnailStrip([bool animated = true]) {
     if (!thumbnailScrollController.hasClients) return;
 
     final viewport = thumbnailScrollController.position.viewportDimension;
+    
+    // Calculate max extent manually to avoid ListView layout thrashing on large galleries.
+    final itemsCount = widget.images.length;
+    final totalWidth = (itemsCount * thumbnailItemWidth) +
+        ((itemsCount > 0 ? itemsCount - 1 : 0) * thumbnailSpacing) +
+        20.0;
+    final calculatedMaxExtent = (totalWidth - viewport).clamp(0.0, double.infinity);
+
     final targetOffset =
         ((currentIndex * (thumbnailItemWidth + thumbnailSpacing)) -
                 ((viewport - thumbnailItemWidth) / 2))
             .clamp(
       0.0,
-      thumbnailScrollController.position.maxScrollExtent,
+      calculatedMaxExtent,
     ).toDouble();
 
     if (animated) {
@@ -112,10 +175,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   void openDetails() {
     thumbnailStripTimer?.cancel();
+    verticalDragNotifier.value = 0;
+    upwardDragNotifier.value = 0;
     setState(() {
       showDetails = true;
-      verticalDrag = 0;
-      upwardDrag = 0;
       detailsDrag = 0;
     });
   }
@@ -123,10 +186,28 @@ class _ViewerScreenState extends State<ViewerScreen> {
   void closeDetails() {
     setState(() {
       showDetails = false;
-      upwardDrag = 0;
       detailsDrag = 0;
     });
+    upwardDragNotifier.value = 0;
     scheduleThumbnailStripHide();
+  }
+
+  void _applySystemUiStyle(Brightness brightness) {
+    if (_lastAppliedBrightness == brightness) return;
+    _lastAppliedBrightness = brightness;
+
+    final isDark = brightness == Brightness.dark;
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor:
+            isDark ? Colors.black : const Color(0xFFF0E6FF),
+        statusBarIconBrightness:
+            isDark ? Brightness.light : Brightness.dark,
+        systemNavigationBarIconBrightness:
+            isDark ? Brightness.light : Brightness.dark,
+      ),
+    );
   }
 
   void toggleThumbnailStrip() {
@@ -176,7 +257,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     if (!controller.hasClients || index == currentIndex) return;
 
     final distance = (index - currentIndex).abs();
-    warmUpVisibleImages(index);
+    warmCurrentThenNeighbors(index);
 
     if (distance >= 4) {
       controller.jumpToPage(index);
@@ -215,15 +296,45 @@ class _ViewerScreenState extends State<ViewerScreen> {
     return '${date.day} ${months[date.month - 1]} ${date.year}  $hour:$minute $period';
   }
 
+  Future<String> fileSizeLabel(AssetEntity asset) {
+    return fileSizeLabelCache.putIfAbsent(asset.id, () async {
+      final File? file = await asset.file;
+      if (file == null) return 'Unavailable';
+
+      final bytes = await file.length();
+      final mb = bytes / (1024 * 1024);
+
+      if (mb >= 100) return '${mb.toStringAsFixed(0)} MB';
+      if (mb >= 10) return '${mb.toStringAsFixed(1)} MB';
+      return '${mb.toStringAsFixed(2)} MB';
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     currentIndex = widget.index;
     currentIndexNotifier.value = widget.index;
     controller = PageController(initialPage: widget.index);
+    final initialViewerProvider = widget.initialViewerProvider;
+    if (initialViewerProvider != null) {
+      providerCache[widget.images[widget.index].id] = initialViewerProvider;
+    }
+    scheduleMicrotask(() {
+      if (!mounted) return;
+      precacheViewerImage(currentIndex);
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      warmUpVisibleImages(currentIndex);
+      deferredNeighborWarmupTimer?.cancel();
+      deferredNeighborWarmupTimer = Timer(
+        const Duration(milliseconds: 90),
+        () {
+          if (!mounted) return;
+          precacheViewerImage(currentIndex - 1);
+          precacheViewerImage(currentIndex + 1);
+        },
+      );
       syncThumbnailStrip(false);
       scheduleThumbnailStripHide();
     });
@@ -232,11 +343,15 @@ class _ViewerScreenState extends State<ViewerScreen> {
   @override
   void dispose() {
     thumbnailStripTimer?.cancel();
+    deferredNeighborWarmupTimer?.cancel();
     photoController.dispose();
     thumbnailScrollController.dispose();
     currentIndexNotifier.dispose();
+    verticalDragNotifier.dispose();
+    upwardDragNotifier.dispose();
     providerCache.clear();
     stripProviderCache.clear();
+    fileSizeLabelCache.clear();
     warmedViewerAssetIds.clear();
     super.dispose();
   }
@@ -244,19 +359,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    // 🔥 FIX SYSTEM UI (NO BLACK BARS)
-    SystemChrome.setSystemUIOverlayStyle(
-      SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        systemNavigationBarColor:
-            isDark ? Colors.black : const Color(0xFFF0E6FF),
-        statusBarIconBrightness:
-            isDark ? Brightness.light : Brightness.dark,
-        systemNavigationBarIconBrightness:
-            isDark ? Brightness.light : Brightness.dark,
-      ),
-    );
+    _applySystemUiStyle(Theme.of(context).brightness);
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -264,30 +367,16 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
       body: Stack(
         children: [
-          // 🌈 BACKGROUND GRADIENT
-          AnimatedOpacity(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            opacity: 1 - (dismissProgress * 0.55),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 400),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: isDark
-                      ? [
-                          const Color(0xFF0F2027),
-                          const Color(0xFF203A43),
-                          const Color(0xFF2C5364),
-                        ]
-                      : [
-                          const Color(0xFFF2E9FF),
-                          const Color(0xFFE3D0FF),
-                        ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-            ),
+          // 🌈 DYNAMIC BACKGROUND
+          ValueListenableBuilder<double>(
+            valueListenable: verticalDragNotifier,
+            builder: (context, verticalDrag, _) {
+              final dismissProgress = (verticalDrag / 220).clamp(0.0, 1.0);
+              return Container(
+                color: (isDark ? Colors.black : Colors.white)
+                    .withOpacity((1.0 - dismissProgress).clamp(0.0, 1.0)),
+              );
+            },
           ),
 
           GestureDetector(
@@ -302,76 +391,93 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 // 🖼️ IMAGE VIEW
                 GestureDetector(
                   onVerticalDragUpdate: (details) {
-                    setState(() {
-                      if (details.delta.dy < 0 && !showDetails) {
-                        upwardDrag = (upwardDrag + (-details.delta.dy))
-                            .clamp(0.0, 160.0);
-                        return;
-                      }
+                    if (details.delta.dy < 0 && !showDetails) {
+                      upwardDragNotifier.value =
+                          (upwardDragNotifier.value + (-details.delta.dy))
+                              .clamp(0.0, 160.0);
+                      return;
+                    }
 
-                      final newDrag = verticalDrag + details.delta.dy;
-                      if (newDrag > 0 && !showDetails) {
-                        verticalDrag =
-                            (verticalDrag + (details.delta.dy * 0.72))
-                                .clamp(0.0, 260.0);
-                      }
-                    });
+                    final newDrag = verticalDragNotifier.value + details.delta.dy;
+                    if (newDrag > 0 && !showDetails) {
+                      verticalDragNotifier.value =
+                          (verticalDragNotifier.value + (details.delta.dy * 0.72))
+                              .clamp(0.0, 260.0);
+                    }
                   },
                   onVerticalDragEnd: (details) {
                     final velocity = details.primaryVelocity ?? 0;
+                    final verticalDrag = verticalDragNotifier.value;
+                    final upwardDrag = upwardDragNotifier.value;
 
                     if (verticalDrag > 150 || velocity > 700) {
                       Navigator.pop(context);
                     } else if (velocity < -140 || upwardDrag > 60) {
                       openDetails();
                     } else {
-                      setState(() {
-                        verticalDrag = 0;
-                        upwardDrag = 0;
-                      });
+                      verticalDragNotifier.value = 0;
+                      upwardDragNotifier.value = 0;
                     }
                   },
-                  child: Transform.translate(
-                    offset: Offset(
-                      0,
-                      verticalDrag - (upwardDrag * 0.22),
-                    ),
-                    child: Transform.scale(
-                      scale: 1 - (dismissProgress * 0.08),
-                      child: Opacity(
-                        opacity: 1 - (dismissProgress * 0.28),
-                        child: PhotoViewGallery.builder(
-                          pageController: controller,
-                          itemCount: widget.images.length,
-                          backgroundDecoration: BoxDecoration(
-                            gradient: isDark
-                                ? const LinearGradient(
-                                    colors: [Colors.black, Colors.black],
-                                  )
-                                : const LinearGradient(
-                                    colors: [
-                                      Color(0xFFF4ECFF),
-                                      Color(0xFFE5D4FF),
-                                    ],
-                                  ),
-                          ),
-                          onPageChanged: (index) {
-                            currentIndex = index;
-                            currentIndexNotifier.value = index;
-                            warmUpVisibleImages(index);
-                            showThumbnailStripTemporarily();
-                            syncThumbnailStrip();
-                          },
-                          builder: (context, index) {
-                            return PhotoViewGalleryPageOptions(
-                              controller: photoController,
-                              imageProvider:
-                                  viewerImageProvider(widget.images[index]),
-                              filterQuality: FilterQuality.medium,
+                  child: RepaintBoundary(
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: verticalDragNotifier,
+                      builder: (context, verticalDrag, _) {
+                        return ValueListenableBuilder<double>(
+                          valueListenable: upwardDragNotifier,
+                          builder: (context, upwardDrag, __) {
+                            return Transform.translate(
+                              offset: Offset(
+                                0,
+                                verticalDrag - (upwardDrag * 0.22),
+                              ),
+                              child: PhotoViewGallery.builder(
+                                pageController: controller,
+                                itemCount: widget.images.length,
+                                backgroundDecoration: BoxDecoration(
+                                  gradient: isDark
+                                      ? const LinearGradient(
+                                          colors: [Colors.black, Colors.black],
+                                        )
+                                      : const LinearGradient(
+                                          colors: [
+                                            Color(0xFFF4ECFF),
+                                            Color(0xFFE5D4FF),
+                                          ],
+                                        ),
+                                ),
+                                onPageChanged: (index) {
+                                  currentIndex = index;
+                                  currentIndexNotifier.value = index;
+                                  warmCurrentThenNeighbors(index);
+                                  showThumbnailStripTemporarily();
+                                  syncThumbnailStrip();
+                                },
+                                builder: (context, index) {
+                                  final asset = widget.images[index];
+                                  return PhotoViewGalleryPageOptions(
+                                    controller: photoController,
+                                    imageProvider: currentPageImageProvider(
+                                      asset,
+                                      index,
+                                    ),
+                                    heroAttributes: PhotoViewHeroAttributes(
+                                      tag: asset.id,
+                                    ),
+                                    minScale:
+                                        PhotoViewComputedScale.contained,
+                                    initialScale:
+                                        PhotoViewComputedScale.contained,
+                                    maxScale:
+                                        PhotoViewComputedScale.covered * 2.4,
+                                    filterQuality: FilterQuality.medium,
+                                  );
+                                },
+                              ),
                             );
                           },
-                        ),
-                      ),
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -693,18 +799,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
                         children: [
                           Container(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
+                              horizontal: 0,
                               vertical: 8,
                             ),
-                            decoration: BoxDecoration(
-                              color: accent.withOpacity(isDark ? 0.16 : 0.12),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Icon(
-                              Icons.auto_awesome_rounded,
-                              size: 18,
-                              color: accent,
-                            ),
+                           
                           ),
                           const SizedBox(width: 12),
                           Expanded(
@@ -722,7 +820,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                 ),
                                 const SizedBox(height: 3),
                                 Text(
-                                  'Captured information and image metadata',
+                                  'Captured information and details',
                                   style: TextStyle(
                                     color: isDark
                                         ? Colors.white70
@@ -765,8 +863,25 @@ class _ViewerScreenState extends State<ViewerScreen> {
                           Expanded(
                             child: infoTile(
                               icon: Icons.photo_library_outlined,
-                              label: 'Position',
-                              value: '${currentIndex + 1}/${widget.images.length}',
+                              label: 'Size',
+                              valueWidget: FutureBuilder<String>(
+                                future: fileSizeLabel(asset),
+                                builder: (context, snapshot) {
+                                  return Text(
+                                    snapshot.data ?? 'Loading...',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: isDark
+                                          ? Colors.white
+                                          : Colors.black87,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      height: 1.2,
+                                    ),
+                                  );
+                                },
+                              ),
                               isDark: isDark,
                               accent: accent,
                             ),
@@ -805,7 +920,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
   Widget infoTile({
     required IconData icon,
     required String label,
-    required String value,
+    String? value,
+    Widget? valueWidget,
     required bool isDark,
     required Color accent,
   }) {
@@ -846,17 +962,20 @@ class _ViewerScreenState extends State<ViewerScreen> {
                   ),
                 ),
                 const SizedBox(height: 5),
-                Text(
-                  value,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: isDark ? Colors.white : Colors.black87,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    height: 1.2,
+                if (valueWidget != null)
+                  valueWidget
+                else
+                  Text(
+                    value ?? '',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: isDark ? Colors.white : Colors.black87,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      height: 1.2,
+                    ),
                   ),
-                ),
               ],
             ),
           ),

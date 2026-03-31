@@ -1,7 +1,8 @@
-import 'dart:typed_data';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:provider/provider.dart';
 import 'glass_container.dart';
 import 'theme_provider.dart';
@@ -25,9 +26,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   static const double pinchStepOutThreshold = 1.08;
   static const double pinchStepInThreshold = 0.92;
   static const int pinchStepCooldownMs = 55;
-  final Map<String, Uint8List?> thumbnailCache = {};
-  final Map<String, ValueNotifier<Uint8List?>> thumbnailNotifiers = {};
-  final Set<String> loadingThumbs = {};
+  final Map<String, AssetEntityImageProvider> thumbnailProviderCache = {};
   int albumGridCount = 3;
   double _lastPinchScale = 1.0;
   double _pinchAccumulator = 1.0;
@@ -38,111 +37,34 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   bool get _isPinching => _activePointers >= 2;
 
   int get albumThumbPx {
-    switch (albumGridCount) {
-      case 2:
-        return 320;
-      case 3:
-        return 240;
-      case 4:
-        return 180;
-      case 5:
-        return 140;
-      default:
-        return 120;
-    }
-  }
-
-  @override
-  void dispose() {
-    for (final notifier in thumbnailNotifiers.values) {
-      notifier.dispose();
-    }
-    super.dispose();
+    return 180;
   }
 
   Route<T> buildCinematicRoute<T>(Widget page) {
     return PageRouteBuilder<T>(
-      transitionDuration: const Duration(milliseconds: 520),
-      reverseTransitionDuration: const Duration(milliseconds: 380),
+      opaque: false,
+      transitionDuration: const Duration(milliseconds: 360),
+      reverseTransitionDuration: const Duration(milliseconds: 360),
       pageBuilder: (context, animation, secondaryAnimation) => page,
       transitionsBuilder: (context, animation, secondaryAnimation, child) {
-        final curved = CurvedAnimation(
+        final curve = CurvedAnimation(
           parent: animation,
           curve: Curves.easeOutCubic,
           reverseCurve: Curves.easeInCubic,
         );
-
-        return FadeTransition(
-          opacity: curved,
-          child: SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(0.035, 0.02),
-              end: Offset.zero,
-            ).animate(curved),
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.985, end: 1).animate(curved),
-              child: child,
-            ),
-          ),
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(1.0, 0.0),
+            end: Offset.zero,
+          ).animate(curve),
+            child: child,
         );
       },
     );
   }
 
   Widget buildImage(AssetEntity asset) {
-    final id = asset.id;
-    thumbnailNotifiers.putIfAbsent(id, () => ValueNotifier(null));
-
-    final cached = thumbnailCache[id];
-    if (cached != null) {
-      return Image.memory(
-        cached,
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-      );
-    }
-
-    if (!loadingThumbs.contains(id)) {
-      loadingThumbs.add(id);
-      asset
-          .thumbnailDataWithSize(const ThumbnailSize(320, 320))
-          .then((data) {
-        if (!mounted) return;
-        if (data != null) {
-          thumbnailCache[id] = data;
-          thumbnailNotifiers[id]!.value = data;
-        }
-      }).whenComplete(() {
-        loadingThumbs.remove(id);
-      });
-    }
-
-    return ValueListenableBuilder<Uint8List?>(
-      valueListenable: thumbnailNotifiers[id]!,
-      builder: (context, value, child) {
-        if (value != null) {
-          return Image.memory(
-            value,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-          );
-        }
-
-        final colorScheme = Theme.of(context).colorScheme;
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                colorScheme.surfaceContainerHighest,
-                colorScheme.surfaceContainer,
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-        );
-      },
-    );
+    return buildImageWithSize(asset, albumThumbPx);
   }
 
   @override
@@ -305,7 +227,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   child: GridView.builder(
                     key: ValueKey('album-grid-$albumGridCount'),
                     padding: const EdgeInsets.all(10),
-                    cacheExtent: 1200,
+                    cacheExtent: 800,
                     itemCount: widget.images.length,
                     physics: _isPinching
                         ? const NeverScrollableScrollPhysics()
@@ -318,17 +240,35 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     ),
                     itemBuilder: (context, index) {
                       final asset = widget.images[index];
+                      final ImageProvider<Object> previewProvider =
+                          thumbnailProviderCache.putIfAbsent(
+                        '${asset.id}@$albumThumbPx',
+                        () => AssetEntityImageProvider(
+                          asset,
+                          isOriginal: false,
+                          thumbnailSize: ThumbnailSize.square(albumThumbPx),
+                          thumbnailFormat: ThumbnailFormat.jpeg,
+                        ),
+                      );
                       return _AlbumReveal(
                         order: index,
                         child: RepaintBoundary(
                           child: GestureDetector(
                             onTap: () {
+                              final openingProvider =
+                                  ViewerScreen.openingImageProvider(
+                                    context,
+                                    asset,
+                                  );
+                              unawaited(precacheImage(openingProvider, context));
                               Navigator.push(
                                 context,
                                 buildCinematicRoute(
                                   ViewerScreen(
                                     images: widget.images,
                                     index: index,
+                                    initialPreviewProvider: previewProvider,
+                                    initialViewerProvider: openingProvider,
                                   ),
                                 ),
                               );
@@ -356,57 +296,46 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   Widget buildImageWithSize(AssetEntity asset, int size) {
     final id = '${asset.id}@$size';
-    thumbnailNotifiers.putIfAbsent(id, () => ValueNotifier(null));
+    final colorScheme = Theme.of(context).colorScheme;
+    final placeholder = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            colorScheme.surfaceContainerHighest,
+            colorScheme.surfaceContainer,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+    );
 
-    final cached = thumbnailCache[id];
-    if (cached != null) {
-      return Image.memory(
-        cached,
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        filterQuality: FilterQuality.low,
-      );
+    if (Scrollable.recommendDeferredLoadingForContext(context)) {
+      return placeholder;
     }
 
-    if (!loadingThumbs.contains(id)) {
-      loadingThumbs.add(id);
-      asset.thumbnailDataWithSize(ThumbnailSize(size, size)).then((data) {
-        if (!mounted) return;
-        if (data != null) {
-          thumbnailCache[id] = data;
-          thumbnailNotifiers[id]!.value = data;
-        }
-      }).whenComplete(() {
-        loadingThumbs.remove(id);
-      });
-    }
+    final provider = thumbnailProviderCache.putIfAbsent(
+      id,
+      () => AssetEntityImageProvider(
+        asset,
+        isOriginal: false,
+        thumbnailSize: ThumbnailSize.square(size),
+        thumbnailFormat: ThumbnailFormat.jpeg,
+      ),
+    );
 
-    return ValueListenableBuilder<Uint8List?>(
-      valueListenable: thumbnailNotifiers[id]!,
-      builder: (context, value, child) {
-        if (value != null) {
-          return Image.memory(
-            value,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-            filterQuality: FilterQuality.low,
-          );
+    return Image(
+      image: provider,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.none,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded || frame != null) {
+          return child;
         }
-
-        final colorScheme = Theme.of(context).colorScheme;
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                colorScheme.surfaceContainerHighest,
-                colorScheme.surfaceContainer,
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-        );
+        return placeholder;
       },
+      errorBuilder: (context, error, stackTrace) => placeholder,
     );
   }
 }
