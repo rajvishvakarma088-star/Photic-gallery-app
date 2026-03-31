@@ -14,6 +14,7 @@ import 'glass_container.dart';
 import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
 import 'viewer_screen.dart';
+import 'video_viewer_screen.dart';
 import 'theme_provider.dart';
 
 class GalleryScreen extends StatefulWidget {
@@ -28,6 +29,7 @@ class _GalleryScreenState extends State<GalleryScreen>
   final GalleryService service = GalleryService();
   final FavoritesDatabase favoritesDatabase = FavoritesDatabase.instance;
   final ScrollController scrollController = ScrollController();
+  final ScrollController videosScrollController = ScrollController();
   final ScrollController favoritesScrollController = ScrollController();
   final ScrollController albumsScrollController = ScrollController();
   final PageStorageKey _galleryScrollKey = const PageStorageKey(
@@ -41,6 +43,7 @@ class _GalleryScreenState extends State<GalleryScreen>
   int _cachedSectionLength = -1;
 
   List<AssetEntity> images = [];
+  List<AssetEntity> videos = [];
   List<AssetEntity> favoriteImages = [];
   List<AlbumSummary> albums = [];
   final Set<String> favorites = {};
@@ -51,13 +54,17 @@ class _GalleryScreenState extends State<GalleryScreen>
   final Set<String> seenThumbnailAssetIds = {};
 
   bool isLoading = true;
+  bool isLoadingVideos = true;
   bool isLoadingFavorites = true;
   bool isLoadingFavoriteImages = false;
   bool isLoadingMore = false;
+  bool isLoadingMoreVideos = false;
   bool isLoadingAlbums = true;
   PermissionState? permissionState;
   bool hasMore = true;
+  bool hasMoreVideos = true;
   int currentPage = 0;
+  int currentVideoPage = 0;
   int selectedIndex = 0;
   static const int pageSize = 160;
   static const double pinchStepOutThreshold = 1.07;
@@ -107,6 +114,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     scrollController.addListener(onScroll);
+    videosScrollController.addListener(onScroll);
     loadFavorites();
     unawaited(loadInitialMediaData());
   }
@@ -117,6 +125,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     _thumbnailWarmupTimer?.cancel();
     thumbnailProviderCache.clear();
     scrollController.dispose();
+    videosScrollController.dispose();
     favoritesScrollController.dispose();
     albumsScrollController.dispose();
     super.dispose();
@@ -138,11 +147,15 @@ class _GalleryScreenState extends State<GalleryScreen>
       setState(() {
         permissionState = permission;
         images = [];
+        videos = [];
         albums = [];
         isLoading = false;
+        isLoadingVideos = false;
         isLoadingMore = false;
+        isLoadingMoreVideos = false;
         isLoadingAlbums = false;
         hasMore = false;
+        hasMoreVideos = false;
       });
       return;
     }
@@ -152,6 +165,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     await Future.wait([
       loadAlbums(permissionOverride: permission),
       loadImages(permissionOverride: permission),
+      loadVideos(permissionOverride: permission),
     ]);
   }
 
@@ -327,6 +341,54 @@ class _GalleryScreenState extends State<GalleryScreen>
     unawaited(_prefetchNextImages());
   }
 
+  Future<void> loadVideos({
+    bool loadMore = false,
+    PermissionState? permissionOverride,
+  }) async {
+    if (loadMore) {
+      if (isLoadingMoreVideos || isLoadingVideos || !hasMoreVideos || selectedIndex != 1) return;
+      setState(() => isLoadingMoreVideos = true);
+    } else {
+      setState(() => isLoadingVideos = true);
+      currentVideoPage = 0;
+      hasMoreVideos = true;
+    }
+
+    if (!loadMore) {
+      final permission = permissionOverride ?? await service.requestImagePermission();
+      if (!mounted) return;
+      if (!permission.hasAccess) {
+        setState(() {
+          permissionState = permission;
+          videos = [];
+          isLoadingVideos = false;
+          isLoadingMoreVideos = false;
+          hasMoreVideos = false;
+        });
+        return;
+      }
+      permissionState = permission;
+    }
+
+    final nextPage = loadMore ? currentVideoPage + 1 : 0;
+    final data = await service.fetchVideos(page: nextPage, size: pageSize);
+    if (!mounted) return;
+
+    setState(() {
+      if (loadMore) {
+        videos.addAll(data);
+        isLoadingMoreVideos = false;
+        currentVideoPage = nextPage;
+        hasMoreVideos = data.length == pageSize;
+      } else {
+        videos = data;
+        isLoadingVideos = false;
+        currentVideoPage = data.isEmpty ? 0 : nextPage;
+        hasMoreVideos = data.length == pageSize;
+      }
+    });
+  }
+
   Future<void> _prefetchNextImages() async {
     if (!mounted ||
         _isPrefetchingNextPage ||
@@ -381,18 +443,21 @@ class _GalleryScreenState extends State<GalleryScreen>
   }
 
   void onScroll() {
-    if (!scrollController.hasClients ||
-        isLoading ||
-        isLoadingMore ||
-        _isViewerTransitioning) {
-      return;
-    }
+    if (_isViewerTransitioning) return;
 
-    final position = scrollController.position;
-    if (position.pixels > position.maxScrollExtent - _galleryLoadMoreThreshold) {
-      loadImages(loadMore: true);
+    if (selectedIndex == 0) {
+      if (!scrollController.hasClients || isLoading || isLoadingMore) return;
+      final position = scrollController.position;
+      if (position.pixels > position.maxScrollExtent - _galleryLoadMoreThreshold) {
+        loadImages(loadMore: true);
+      }
+    } else if (selectedIndex == 1) {
+      if (!videosScrollController.hasClients || isLoadingVideos || isLoadingMoreVideos) return;
+      final position = videosScrollController.position;
+      if (position.pixels > position.maxScrollExtent - _galleryLoadMoreThreshold) {
+        loadVideos(loadMore: true);
+      }
     }
-
   }
 
   ImageProvider<Object> _thumbnailProviderFor(
@@ -528,6 +593,11 @@ class _GalleryScreenState extends State<GalleryScreen>
             label: 'Gallery',
           ),
           const NavigationDestination(
+            icon: Icon(Icons.videocam_outlined),
+            selectedIcon: Icon(Icons.videocam),
+            label: 'Videos',
+          ),
+          const NavigationDestination(
             icon: Icon(Icons.folder_copy_outlined),
             selectedIcon: Icon(Icons.folder_copy),
             label: 'Albums',
@@ -549,23 +619,9 @@ class _GalleryScreenState extends State<GalleryScreen>
   Route<T> buildCinematicRoute<T>(Widget page) {
     return PageRouteBuilder<T>(
       opaque: false,
-      transitionDuration: const Duration(milliseconds: 360),
-      reverseTransitionDuration: const Duration(milliseconds: 360),
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
       pageBuilder: (context, animation, secondaryAnimation) => page,
-      transitionsBuilder: (context, animation, secondaryAnimation, child) {
-        final curve = CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        );
-        return SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(1.0, 0.0),
-            end: Offset.zero,
-          ).animate(curve),
-          child: child,
-        );
-      },
     );
   }
 
@@ -782,23 +838,40 @@ class _GalleryScreenState extends State<GalleryScreen>
         onTap: () async {
           _thumbnailWarmupTimer?.cancel();
           _isViewerTransitioning = true;
-          // Warm up both preview and opening providers so the transition is smooth.
-          if (previewProvider != null) {
-            unawaited(precacheImage(previewProvider, context));
-          }
-          unawaited(precacheImage(openingProvider, context));
+          
+          if (asset.type == AssetType.video) {
+            final videoList = visibleImages.where((e) => e.type == AssetType.video).toList();
+            var videoIndex = videoList.indexWhere((e) => e.id == asset.id);
+            if (videoIndex == -1) {
+              videoList.insert(0, asset);
+              videoIndex = 0;
+            }
 
-          await Navigator.push(
-            context,
-            buildCinematicRoute(
-              ViewerScreen(
-                images: visibleImages,
-                index: absoluteIndex,
-                initialPreviewProvider: previewProvider,
-                initialViewerProvider: openingProvider,
+            await Navigator.push(
+              context,
+              buildCinematicRoute(
+                VideoViewerScreen(videos: videoList, initialIndex: videoIndex),
               ),
-            ),
-          );
+            );
+          } else {
+            // Warm up both preview and opening providers so the transition is smooth.
+            if (previewProvider != null) {
+              unawaited(precacheImage(previewProvider, context));
+            }
+            unawaited(precacheImage(openingProvider, context));
+
+            await Navigator.push(
+              context,
+              buildCinematicRoute(
+                ViewerScreen(
+                  images: visibleImages,
+                  index: absoluteIndex,
+                  initialPreviewProvider: previewProvider,
+                  initialViewerProvider: openingProvider,
+                ),
+              ),
+            );
+          }
           if (!mounted) return;
           _isViewerTransitioning = false;
           _scheduleThumbnailWarmup();
@@ -816,6 +889,33 @@ class _GalleryScreenState extends State<GalleryScreen>
                 child: buildImage(asset, thumbPx: galleryThumbPx),
               ),
             ),
+            if (asset.type == AssetType.video)
+              Positioned(
+                bottom: 8,
+                right: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 14),
+                      const SizedBox(width: 2),
+                      Text(
+                        _formatDuration(asset.videoDuration),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             if (favorites.contains(asset.id))
               const Positioned(
                 top: 8,
@@ -837,6 +937,16 @@ class _GalleryScreenState extends State<GalleryScreen>
         ),
       ),
     );
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, "0");
+    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
+    String twoDigitSeconds = twoDigits(duration.inSeconds.remainder(60));
+    if (duration.inHours > 0) {
+      return "${duration.inHours}:$twoDigitMinutes:$twoDigitSeconds";
+    }
+    return "$twoDigitMinutes:$twoDigitSeconds";
   }
 
   Widget buildGridView(
@@ -1024,19 +1134,21 @@ class _GalleryScreenState extends State<GalleryScreen>
     ColorScheme colorScheme,
     bool isDark,
   ) {
-    if (selectedIndex == 1) {
+    if (selectedIndex == 2) {
       return KeyedSubtree(
         key: const ValueKey('albums'),
         child: buildAlbumsView(colorScheme, isDark),
       );
     }
-    if (isLoading || (selectedIndex == 2 && isLoadingFavoriteImages)) {
+    if ((selectedIndex == 0 && isLoading) ||
+        (selectedIndex == 1 && isLoadingVideos) ||
+        (selectedIndex == 3 && isLoadingFavoriteImages)) {
       return const KeyedSubtree(
         key: ValueKey('loading'),
         child: Center(child: CircularProgressIndicator()),
       );
     }
-    if (selectedIndex == 0 && permissionState != null && !permissionState!.hasAccess) {
+    if ((selectedIndex == 0 || selectedIndex == 1) && permissionState != null && !permissionState!.hasAccess) {
       return KeyedSubtree(
         key: const ValueKey('permission-empty'),
         child: Center(
@@ -1091,11 +1203,15 @@ class _GalleryScreenState extends State<GalleryScreen>
       );
     }
     if (visibleImages.isEmpty) {
+      String emptyText = 'No images found';
+      if (selectedIndex == 1) emptyText = 'No videos found';
+      else if (selectedIndex == 3) emptyText = 'No favorite items yet';
+
       return KeyedSubtree(
         key: ValueKey('empty-$selectedIndex'),
         child: Center(
           child: Text(
-            selectedIndex == 0 ? 'No images found' : 'No favorite images yet',
+            emptyText,
             style: TextStyle(
               color: colorScheme.onSurface.withOpacity(0.8),
               fontSize: 16,
@@ -1105,12 +1221,17 @@ class _GalleryScreenState extends State<GalleryScreen>
         ),
       );
     }
+    
+    ScrollController currentController = scrollController;
+    if (selectedIndex == 1) currentController = videosScrollController;
+    else if (selectedIndex == 3) currentController = favoritesScrollController;
+
     return KeyedSubtree(
       key: ValueKey('grid-$selectedIndex'),
       child: buildGridView(
         visibleImages,
         colorScheme,
-        selectedIndex == 2 ? favoritesScrollController : scrollController,
+        currentController,
       ),
     );
   }
@@ -1122,10 +1243,11 @@ class _GalleryScreenState extends State<GalleryScreen>
     final colorScheme = Theme.of(context).colorScheme;
     final topBarColor =
         isDark ? const Color(0xFF120C24) : const Color(0xFFF1E8FF);
-    final titles = ['Gallery', 'Albums', 'Favorites'];
-    final visibleImages = selectedIndex == 2
-        ? favoriteImages
-        : images;
+    final titles = ['Gallery', 'Videos', 'Albums', 'Favorites'];
+
+    List<AssetEntity> visibleImages = images;
+    if (selectedIndex == 1) visibleImages = videos;
+    else if (selectedIndex == 3) visibleImages = favoriteImages;
 
     final overlayStyle = isDark
         ? SystemUiOverlayStyle.light

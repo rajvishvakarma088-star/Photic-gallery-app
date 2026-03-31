@@ -43,23 +43,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Route<T> buildCinematicRoute<T>(Widget page) {
     return PageRouteBuilder<T>(
       opaque: false,
-      transitionDuration: const Duration(milliseconds: 360),
-      reverseTransitionDuration: const Duration(milliseconds: 360),
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
       pageBuilder: (context, animation, secondaryAnimation) => page,
-      transitionsBuilder: (context, animation, secondaryAnimation, child) {
-        final curve = CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        );
-        return SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(1.0, 0.0),
-            end: Offset.zero,
-          ).animate(curve),
-            child: child,
-        );
-      },
     );
   }
 

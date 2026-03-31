@@ -18,6 +18,7 @@ class AlbumSummary {
 
 class GalleryService {
   AssetPathEntity? _allPhotosPathCache;
+  AssetPathEntity? _allVideosPathCache;
   final FilterOptionGroup _galleryFilter = FilterOptionGroup(
     orders: const [
       OrderOption(type: OrderOptionType.createDate, asc: false),
@@ -29,7 +30,7 @@ class GalleryService {
     return PhotoManager.requestPermissionExtend(
       requestOption: const PermissionRequestOption(
         androidPermission: AndroidPermission(
-          type: RequestType.image,
+          type: RequestType.common,
           mediaLocation: false,
         ),
       ),
@@ -44,6 +45,7 @@ class GalleryService {
 
   void clearCache() {
     _allPhotosPathCache = null;
+    _allVideosPathCache = null;
   }
 
   Future<List<AssetEntity>> fetchImages({
@@ -57,6 +59,19 @@ class GalleryService {
     final images = await allPhotos.getAssetListPaged(page: page, size: size);
     images.sort(compareAssetsByNewestFirst);
     return images;
+  }
+
+  Future<List<AssetEntity>> fetchVideos({
+    int page = 0,
+    int size = 120,
+  }) async {
+    if (!await _hasPermission()) return [];
+    final allVideos = await _getAllVideosPath();
+    if (allVideos == null) return [];
+
+    final videos = await allVideos.getAssetListPaged(page: page, size: size);
+    videos.sort(compareAssetsByNewestFirst);
+    return videos;
   }
 
   Future<List<AlbumSummary>> fetchAlbums() async {
@@ -143,6 +158,24 @@ class GalleryService {
       orElse: () => albums.first,
     );
     return _allPhotosPathCache;
+  }
+
+  Future<AssetPathEntity?> _getAllVideosPath() async {
+    final cached = _allVideosPathCache;
+    if (cached != null) return cached;
+
+    final albums = await PhotoManager.getAssetPathList(
+      type: RequestType.video,
+      hasAll: true,
+      filterOption: _galleryFilter,
+    );
+    if (albums.isEmpty) return null;
+
+    _allVideosPathCache = albums.firstWhere(
+      (album) => album.isAll,
+      orElse: () => albums.first,
+    );
+    return _allVideosPathCache;
   }
 
   DateTime resolveAssetDate(AssetEntity asset) {

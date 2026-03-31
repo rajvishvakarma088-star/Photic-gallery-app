@@ -1,12 +1,17 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
+import 'dart:ui';
+import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:pro_image_editor/pro_image_editor.dart';
+
 import 'glass_container.dart';
 
 class ViewerScreen extends StatefulWidget {
@@ -93,7 +98,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       return AssetEntityImageProvider(
         asset,
         isOriginal: false,
-        thumbnailSize: const ThumbnailSize(2000, 2000),
+        thumbnailSize: const ThumbnailSize(800, 800),
         thumbnailFormat: ThumbnailFormat.jpeg,
       );
     });
@@ -256,23 +261,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
   Future<void> animateToViewerPage(int index) async {
     if (!controller.hasClients || index == currentIndex) return;
 
-    final distance = (index - currentIndex).abs();
     warmCurrentThenNeighbors(index);
-
-    if (distance >= 4) {
-      controller.jumpToPage(index);
-      return;
-    }
-
-    final duration = Duration(
-      milliseconds: 160 + (distance * 55),
-    );
-
-    await controller.animateToPage(
-      index,
-      duration: duration,
-      curve: Curves.easeOutCubic,
-    );
+    controller.jumpToPage(index);
   }
 
   String formatDate(DateTime date) {
@@ -390,6 +380,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
               children: [
                 // 🖼️ IMAGE VIEW
                 GestureDetector(
+                  onLongPress: () => showContextMenu(isDark),
                   onVerticalDragUpdate: (details) {
                     if (details.delta.dy < 0 && !showDetails) {
                       upwardDragNotifier.value =
@@ -426,33 +417,33 @@ class _ViewerScreenState extends State<ViewerScreen> {
                         return ValueListenableBuilder<double>(
                           valueListenable: upwardDragNotifier,
                           builder: (context, upwardDrag, __) {
+                            final totalDrag = verticalDrag + upwardDrag;
+                            final scale = (1.0 - (totalDrag / 1000)).clamp(0.65, 1.0);
+                            final borderRadius = (1.0 - scale) * 100;
+
                             return Transform.translate(
                               offset: Offset(
                                 0,
                                 verticalDrag - (upwardDrag * 0.22),
                               ),
-                              child: PhotoViewGallery.builder(
-                                pageController: controller,
-                                itemCount: widget.images.length,
-                                backgroundDecoration: BoxDecoration(
-                                  gradient: isDark
-                                      ? const LinearGradient(
-                                          colors: [Colors.black, Colors.black],
-                                        )
-                                      : const LinearGradient(
-                                          colors: [
-                                            Color(0xFFF4ECFF),
-                                            Color(0xFFE5D4FF),
-                                          ],
-                                        ),
-                                ),
-                                onPageChanged: (index) {
+                              child: Transform.scale(
+                                scale: scale,
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(borderRadius),
+                                  child: PhotoViewGallery.builder(
+                                    pageController: controller,
+                                    itemCount: widget.images.length,
+                                    backgroundDecoration: const BoxDecoration(
+                                      color: Colors.transparent,
+                                    ),
+                                    onPageChanged: (index) {
                                   currentIndex = index;
                                   currentIndexNotifier.value = index;
                                   warmCurrentThenNeighbors(index);
                                   showThumbnailStripTemporarily();
                                   syncThumbnailStrip();
                                 },
+                                loadingBuilder: (context, event) => const SizedBox(),
                                 builder: (context, index) {
                                   final asset = widget.images[index];
                                   return PhotoViewGalleryPageOptions(
@@ -470,14 +461,37 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                         PhotoViewComputedScale.contained,
                                     maxScale:
                                         PhotoViewComputedScale.covered * 2.4,
-                                    filterQuality: FilterQuality.medium,
+                                    filterQuality: FilterQuality.low,
                                   );
                                 },
                               ),
-                            );
-                          },
+                            ),
+                          ),
                         );
                       },
+                        );
+                      },
+                    ),
+                  ),
+                ),
+
+                // 🔙 MENU BUTTON
+                Positioned(
+                  top: 50,
+                  right: 20,
+                  child: ValueListenableBuilder<double>(
+                    valueListenable: verticalDragNotifier,
+                    builder: (context, drag, child) {
+                      return AnimatedOpacity(
+                        duration: const Duration(milliseconds: 100),
+                        opacity: drag > 20 ? 0 : 1.0,
+                        child: child,
+                      );
+                    },
+                    child: glassButton(
+                      icon: Icons.more_vert_rounded,
+                      isDark: isDark,
+                      onTap: () => showContextMenu(isDark),
                     ),
                   ),
                 ),
@@ -486,18 +500,27 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 Positioned(
                   top: 50,
                   left: 20,
-                  child: glassButton(
-                    icon: Icons.arrow_back,
-                    isDark: isDark,
-                    onTap: () => Navigator.pop(context),
+                  child: ValueListenableBuilder<double>(
+                    valueListenable: verticalDragNotifier,
+                    builder: (context, drag, child) {
+                      return AnimatedOpacity(
+                        duration: const Duration(milliseconds: 100),
+                        opacity: drag > 20 ? 0 : 1.0,
+                        child: child,
+                      );
+                    },
+                    child: glassButton(
+                      icon: Icons.arrow_back,
+                      isDark: isDark,
+                      onTap: () => Navigator.pop(context),
+                    ),
                   ),
                 ),
 
                 Positioned(
                   left: 0,
                   right: 0,
-                  bottom: thumbnailBarBottomOffset +
-                      MediaQuery.of(context).padding.bottom,
+                  bottom: 84 + MediaQuery.of(context).padding.bottom,
                   child: IgnorePointer(
                     ignoring: showDetails,
                     child: AnimatedSlide(
@@ -523,10 +546,37 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 ),
 
                 Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 8 + MediaQuery.of(context).padding.bottom,
+                  child: IgnorePointer(
+                    ignoring: showDetails,
+                    child: AnimatedSlide(
+                      duration: const Duration(milliseconds: 320),
+                      curve: Curves.easeOutCubic,
+                      offset: showDetails ? const Offset(0, 2) : Offset.zero,
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 220),
+                        opacity: showDetails ? 0 : 1,
+                        child: ValueListenableBuilder<double>(
+                          valueListenable: verticalDragNotifier,
+                          builder: (context, drag, child) {
+                            return AnimatedOpacity(
+                              duration: const Duration(milliseconds: 100),
+                              opacity: drag > 20 ? 0 : 1.0,
+                              child: child,
+                            );
+                          },
+                          child: buildQuickActionBar(isDark),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                Positioned(
                   right: 12,
-                  bottom: thumbnailBarBottomOffset +
-                      MediaQuery.of(context).padding.bottom +
-                      11,
+                  bottom: 95 + MediaQuery.of(context).padding.bottom,
                   child: IgnorePointer(
                     ignoring: showDetails,
                     child: AnimatedOpacity(
@@ -662,6 +712,122 @@ class _ViewerScreenState extends State<ViewerScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget buildQuickActionBar(bool isDark) {
+    return GlassContainer(
+      borderRadius: BorderRadius.circular(32),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _actionIcon(Icons.share_rounded, isDark, shareAsset),
+            _actionIcon(Icons.edit_rounded, isDark, editAsset),
+            _actionIcon(Icons.visibility_off_rounded, isDark, hideAsset),
+            _actionIcon(Icons.delete_rounded, isDark, deleteAsset),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _actionIcon(IconData icon, bool isDark, VoidCallback onTap) {
+    return IconButton(
+      iconSize: 28,
+      padding: EdgeInsets.zero,
+      icon: Icon(icon, color: isDark ? Colors.white : Colors.black87),
+      onPressed: onTap,
+    );
+  }
+
+  Future<void> shareAsset() async {
+    final asset = widget.images[currentIndexNotifier.value];
+    final file = await asset.file;
+    if (file != null) {
+      await Share.shareXFiles([XFile(file.path)], text: 'Check this out!');
+    }
+  }
+
+  Future<void> editAsset() async {
+    final asset = widget.images[currentIndexNotifier.value];
+    final file = await asset.file;
+    if (file == null) return;
+    
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ProImageEditor.file(
+           file,
+           callbacks: ProImageEditorCallbacks(
+              onImageEditingComplete: (Uint8List bytes) async {
+                 Navigator.pop(context);
+              }
+           )
+        ),
+      )
+    );
+  }
+
+  Future<void> hideAsset() async {
+     ScaffoldMessenger.of(context).showSnackBar(
+       const SnackBar(content: Text('Moved to Private Vault'), behavior: SnackBarBehavior.floating),
+     );
+  }
+
+  Future<void> deleteAsset() async {
+    final asset = widget.images[currentIndexNotifier.value];
+    final result = await PhotoManager.editor.deleteWithIds([asset.id]);
+    if (result.isNotEmpty) {
+       Navigator.pop(context);
+    }
+  }
+
+  void showContextMenu(bool isDark) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return GlassContainer(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            child: SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                   Container(
+                     width: 44, height: 5,
+                     margin: const EdgeInsets.only(bottom: 24),
+                     decoration: BoxDecoration(color: isDark ? Colors.white38 : Colors.black26, borderRadius: BorderRadius.circular(99)),
+                   ),
+                   ListTile(
+                     leading: Icon(Icons.share_rounded, color: isDark ? Colors.white : Colors.black),
+                     title: Text('Share', style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.w600)),
+                     onTap: () { Navigator.pop(context); shareAsset(); },
+                   ),
+                   ListTile(
+                     leading: Icon(Icons.edit_rounded, color: isDark ? Colors.white : Colors.black),
+                     title: Text('Edit', style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.w600)),
+                     onTap: () { Navigator.pop(context); editAsset(); },
+                   ),
+                   ListTile(
+                     leading: Icon(Icons.visibility_off_rounded, color: isDark ? Colors.white : Colors.black),
+                     title: Text('Move to Vault', style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.w600)),
+                     onTap: () { Navigator.pop(context); hideAsset(); },
+                   ),
+                   ListTile(
+                     leading: const Icon(Icons.delete_rounded, color: Colors.redAccent),
+                     title: const Text('Delete', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600)),
+                     onTap: () { Navigator.pop(context); deleteAsset(); },
+                   ),
+                ]
+              )
+            )
+          )
+        );
+      }
     );
   }
 
