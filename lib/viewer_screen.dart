@@ -1,18 +1,18 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as path;
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
 import 'dart:ui';
-import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
 
 import 'glass_container.dart';
+import 'services/recycle_bin_database.dart';
 
 class ViewerScreen extends StatefulWidget {
   final List<AssetEntity> images;
@@ -49,6 +49,7 @@ class ViewerScreen extends StatefulWidget {
 }
 
 class _ViewerScreenState extends State<ViewerScreen> {
+  final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
   late PageController controller;
   final ScrollController thumbnailScrollController = ScrollController();
   final ValueNotifier<int> currentIndexNotifier = ValueNotifier<int>(0);
@@ -66,13 +67,14 @@ class _ViewerScreenState extends State<ViewerScreen> {
   double detailsDrag = 0;
   bool showDetails = false;
   bool showThumbnailStrip = true;
+  bool isDeletingToRecycleBin = false;
+  bool showViewerChrome = true;
   int currentIndex = 0;
   Brightness? _lastAppliedBrightness;
 
   final PhotoViewController photoController = PhotoViewController();
   static const double detailsSheetHeight = 316;
-  static const double thumbnailBarBottomOffset = 84;
-  static const double thumbnailItemWidth = 56;
+  static const double thumbnailItemWidth = 52;
   static const double thumbnailSpacing = 8;
 
   double get dismissProgress =>
@@ -184,6 +186,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     upwardDragNotifier.value = 0;
     setState(() {
       showDetails = true;
+      showViewerChrome = true;
       detailsDrag = 0;
     });
   }
@@ -374,6 +377,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
             onTap: () {
               if (showDetails) {
                 closeDetails();
+              } else {
+                setState(() {
+                  showViewerChrome = !showViewerChrome;
+                });
               }
             },
             child: Stack(
@@ -476,6 +483,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 ),
 
                 // 🔙 MENU BUTTON
+                if (showViewerChrome)
                 Positioned(
                   top: 50,
                   right: 20,
@@ -497,6 +505,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 ),
 
                 // 🔙 BACK BUTTON
+                if (showViewerChrome)
                 Positioned(
                   top: 50,
                   left: 20,
@@ -517,10 +526,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
                   ),
                 ),
 
+                if (showViewerChrome)
                 Positioned(
                   left: 0,
                   right: 0,
-                  bottom: 84 + MediaQuery.of(context).padding.bottom,
+                  bottom: 106 + MediaQuery.of(context).padding.bottom,
                   child: IgnorePointer(
                     ignoring: showDetails,
                     child: AnimatedSlide(
@@ -533,7 +543,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                               : const Offset(0, 0.9),
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 220),
-                        opacity: showDetails || !showThumbnailStrip ? 0 : 1,
+                        opacity: showDetails || !showThumbnailStrip || !showViewerChrome ? 0 : 1,
                         child: ValueListenableBuilder<int>(
                           valueListenable: currentIndexNotifier,
                           builder: (context, _, __) {
@@ -545,10 +555,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
                   ),
                 ),
 
+                if (showViewerChrome)
                 Positioned(
                   left: 16,
                   right: 16,
-                  bottom: 8 + MediaQuery.of(context).padding.bottom,
+                  bottom: 2 + MediaQuery.of(context).padding.bottom,
                   child: IgnorePointer(
                     ignoring: showDetails,
                     child: AnimatedSlide(
@@ -557,7 +568,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                       offset: showDetails ? const Offset(0, 2) : Offset.zero,
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 220),
-                        opacity: showDetails ? 0 : 1,
+                        opacity: showDetails || !showViewerChrome ? 0 : 1,
                         child: ValueListenableBuilder<double>(
                           valueListenable: verticalDragNotifier,
                           builder: (context, drag, child) {
@@ -574,14 +585,15 @@ class _ViewerScreenState extends State<ViewerScreen> {
                   ),
                 ),
 
+                if (showViewerChrome)
                 Positioned(
                   right: 12,
-                  bottom: 95 + MediaQuery.of(context).padding.bottom,
+                  bottom: 117 + MediaQuery.of(context).padding.bottom,
                   child: IgnorePointer(
                     ignoring: showDetails,
                     child: AnimatedOpacity(
                       duration: const Duration(milliseconds: 220),
-                      opacity: showDetails ? 0 : 1,
+                      opacity: showDetails || !showViewerChrome ? 0 : 1,
                       child: buildThumbnailStripToggle(isDark),
                     ),
                   ),
@@ -617,7 +629,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       child: GlassContainer(
         borderRadius: BorderRadius.circular(24),
         child: SizedBox(
-          height: 62,
+          height: 58,
           child: NotificationListener<ScrollNotification>(
             onNotification: (notification) {
               if (notification is ScrollStartNotification) {
@@ -631,7 +643,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
             },
             child: ListView.separated(
               controller: thumbnailScrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               itemCount: widget.images.length,
@@ -660,7 +672,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                     duration: const Duration(milliseconds: 220),
                     curve: Curves.easeOutCubic,
                     width: thumbnailItemWidth,
-                    padding: const EdgeInsets.all(2.5),
+                    padding: const EdgeInsets.all(2.2),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(18),
                       border: Border.all(
@@ -742,18 +754,50 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
-  Future<void> shareAsset() async {
-    final asset = widget.images[currentIndexNotifier.value];
-    final file = await asset.file;
-    if (file != null) {
-      await Share.shareXFiles([XFile(file.path)], text: 'Check this out!');
+  AssetEntity get _currentAsset => widget.images[currentIndexNotifier.value];
+
+  void _showViewerSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  Future<void> _shareCurrentFile({
+    String? text,
+    String? subject,
+  }) async {
+    final file = await _currentAsset.file;
+    if (file == null) {
+      _showViewerSnackBar('File not available');
+      return;
     }
+
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(file.path)],
+        text: text,
+        subject: subject,
+      ),
+    );
+  }
+
+  Future<void> shareAsset() async {
+    await _shareCurrentFile(
+      text: 'Check this out!',
+      subject: 'Shared from Gallery',
+    );
   }
 
   Future<void> editAsset() async {
     final asset = widget.images[currentIndexNotifier.value];
     final file = await asset.file;
-    if (file == null) return;
+    if (file == null || !mounted) return;
     
     await Navigator.push(
       context,
@@ -776,58 +820,542 @@ class _ViewerScreenState extends State<ViewerScreen> {
      );
   }
 
+  Future<void> openWithAnotherApp() async {
+    await _shareCurrentFile(
+      text: 'Opening in another app',
+      subject: 'Open with',
+    );
+  }
+
+  Future<void> _showRenameDialog() async {
+    final file = await _currentAsset.file;
+    final currentName = file == null ? 'Unknown file' : path.basename(file.path);
+    final controller = TextEditingController(text: currentName);
+
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.24),
+      builder: (dialogContext) {
+        final colorScheme = Theme.of(dialogContext).colorScheme;
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: GlassContainer(
+            borderRadius: BorderRadius.circular(32),
+            blurSigma: 18,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Rename',
+                    style: TextStyle(
+                      color: colorScheme.onSurface,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Premium rename UI is ready, but safe gallery-file rename still needs native media-store handling in this app.',
+                    style: TextStyle(
+                      color: colorScheme.onSurface.withValues(alpha: 0.74),
+                      height: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: controller,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Current file name',
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      child: const Text('Close'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showSetAsSheet(bool isDark) async {
+    final color = isDark ? Colors.white : Colors.black87;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      enableDrag: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return _buildAnimatedSheet(
+          child: GlassContainer(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+          blurSigma: 20,
+          child: SafeArea(
+            top: false,
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                  Center(
+                    child: Container(
+                      width: 44,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.24),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'Set As',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Choose where you want to use this image next.',
+                    style: TextStyle(
+                      color: color.withValues(alpha: 0.68),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.wallpaper_rounded,
+                    title: 'Home Screen',
+                    subtitle: 'Prepare this photo for wallpaper use',
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      _showViewerSnackBar(
+                        'Set as wallpaper needs native Android integration next',
+                      );
+                    },
+                  ),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.lock_rounded,
+                    title: 'Lock Screen',
+                    subtitle: 'Use this image on the lock screen',
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      _showViewerSnackBar(
+                        'Lock-screen set as needs native Android integration next',
+                      );
+                    },
+                  ),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.person_rounded,
+                    title: 'Profile Photo',
+                    subtitle: 'Open this image in another app to continue',
+                    onTap: () async {
+                      Navigator.pop(sheetContext);
+                      await openWithAnotherApp();
+                    },
+                  ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ));
+      },
+    );
+  }
+
   Future<void> deleteAsset() async {
-    final asset = widget.images[currentIndexNotifier.value];
-    final result = await PhotoManager.editor.deleteWithIds([asset.id]);
-    if (result.isNotEmpty) {
-       Navigator.pop(context);
+    if (isDeletingToRecycleBin) return;
+    final shouldMove = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      builder: (dialogContext) {
+        final colorScheme = Theme.of(dialogContext).colorScheme;
+        final isDark = Theme.of(dialogContext).brightness == Brightness.dark;
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: GlassContainer(
+            borderRadius: BorderRadius.circular(34),
+            blurSigma: 18,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withValues(
+                            alpha: isDark ? 0.12 : 0.32,
+                          ),
+                        ),
+                        child: Icon(
+                          Icons.delete_outline_rounded,
+                          color: colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          'Move To Recycle Bin?',
+                          style: TextStyle(
+                            color: colorScheme.onSurface,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'This item will be moved to the recycle bin and can be restored later.',
+                    style: TextStyle(
+                      color: colorScheme.onSurface.withValues(alpha: 0.76),
+                      height: 1.42,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(dialogContext, false),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            side: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.28),
+                            ),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(dialogContext, true),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Move'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    if (shouldMove != true || !mounted) return;
+
+    setState(() {
+      isDeletingToRecycleBin = true;
+    });
+    try {
+      final asset = widget.images[currentIndexNotifier.value];
+      await recycleBinDatabase.addAsset(asset);
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          isDeletingToRecycleBin = false;
+        });
+      }
     }
   }
 
   void showContextMenu(bool isDark) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
+      enableDrag: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        return GlassContainer(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        final textColor = isDark ? Colors.white : const Color(0xFF211A33);
+        return _buildAnimatedSheet(
+          child: GlassContainer(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+          blurSigma: 22,
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
             child: SafeArea(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                   Container(
-                     width: 44, height: 5,
-                     margin: const EdgeInsets.only(bottom: 24),
-                     decoration: BoxDecoration(color: isDark ? Colors.white38 : Colors.black26, borderRadius: BorderRadius.circular(99)),
-                   ),
-                   ListTile(
-                     leading: Icon(Icons.share_rounded, color: isDark ? Colors.white : Colors.black),
-                     title: Text('Share', style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.w600)),
-                     onTap: () { Navigator.pop(context); shareAsset(); },
-                   ),
-                   ListTile(
-                     leading: Icon(Icons.edit_rounded, color: isDark ? Colors.white : Colors.black),
-                     title: Text('Edit', style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.w600)),
-                     onTap: () { Navigator.pop(context); editAsset(); },
-                   ),
-                   ListTile(
-                     leading: Icon(Icons.visibility_off_rounded, color: isDark ? Colors.white : Colors.black),
-                     title: Text('Move to Vault', style: TextStyle(color: isDark ? Colors.white : Colors.black, fontWeight: FontWeight.w600)),
-                     onTap: () { Navigator.pop(context); hideAsset(); },
-                   ),
-                   ListTile(
-                     leading: const Icon(Icons.delete_rounded, color: Colors.redAccent),
-                     title: const Text('Delete', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600)),
-                     onTap: () { Navigator.pop(context); deleteAsset(); },
-                   ),
-                ]
-              )
-            )
-          )
-        );
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                  Container(
+                    width: 44,
+                    height: 5,
+                    margin: const EdgeInsets.only(bottom: 20),
+                    decoration: BoxDecoration(
+                      color: textColor.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                  Text(
+                    'Photo Actions',
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Quick tools and premium actions for this image.',
+                    style: TextStyle(
+                      color: textColor.withValues(alpha: 0.68),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _buildMenuSectionLabel(title: 'Editing', color: textColor),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.edit_rounded,
+                    title: 'Edit',
+                    subtitle: 'Open the built-in editor',
+                    onTap: () {
+                      Navigator.pop(context);
+                      editAsset();
+                    },
+                  ),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.drive_file_rename_outline_rounded,
+                    title: 'Rename',
+                    subtitle: 'Prepare a better file name',
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _showRenameDialog();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _buildMenuSectionLabel(title: 'Sharing', color: textColor),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.open_in_new_rounded,
+                    title: 'Open With App',
+                    subtitle: 'Send this image into another app',
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await openWithAnotherApp();
+                    },
+                  ),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.wallpaper_rounded,
+                    title: 'Set As',
+                    subtitle: 'Wallpaper, lock screen, or profile photo',
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _showSetAsSheet(isDark);
+                    },
+                  ),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.share_rounded,
+                    title: 'Share',
+                    subtitle: 'Share this image anywhere',
+                    onTap: () {
+                      Navigator.pop(context);
+                      shareAsset();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _buildMenuSectionLabel(title: 'Privacy', color: textColor),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.visibility_off_rounded,
+                    title: 'Move to Vault',
+                    subtitle: 'Hide this image from the gallery',
+                    onTap: () {
+                      Navigator.pop(context);
+                      hideAsset();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _buildMenuSectionLabel(title: 'Delete', color: textColor),
+                  _buildMenuTile(
+                    isDark: isDark,
+                    icon: Icons.delete_rounded,
+                    title: 'Move to Recycle Bin',
+                    subtitle: 'Remove it now, restore it later',
+                    destructive: true,
+                    onTap: () {
+                      Navigator.pop(context);
+                      deleteAsset();
+                    },
+                  ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ));
       }
+    );
+  }
+
+  Widget _buildMenuTile({
+    required bool isDark,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    bool destructive = false,
+  }) {
+    final textColor = destructive
+        ? const Color(0xFFE65A66)
+        : (isDark ? Colors.white : const Color(0xFF211A33));
+    final iconBg = destructive
+        ? const Color(0xFFE65A66).withValues(alpha: 0.12)
+        : (isDark
+              ? Colors.white.withValues(alpha: 0.1)
+              : Colors.white.withValues(alpha: 0.48));
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          splashColor: textColor.withValues(alpha: 0.08),
+          highlightColor: textColor.withValues(alpha: 0.04),
+          overlayColor: WidgetStatePropertyAll(
+            textColor.withValues(alpha: 0.06),
+          ),
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onTap();
+          },
+          child: GlassContainer(
+            borderRadius: BorderRadius.circular(24),
+            enableBlur: false,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isDark ? 0.12 : 0.08),
+                    blurRadius: 18,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Row(
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: iconBg,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Icon(icon, color: textColor),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.7),
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: textColor.withValues(alpha: 0.72),
+                ),
+              ],
+            )),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMenuSectionLabel({
+    required String title,
+    required Color color,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 2, 4, 10),
+      child: Text(
+        title.toUpperCase(),
+        style: TextStyle(
+          color: color.withValues(alpha: 0.54),
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 1.1,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnimatedSheet({required Widget child}) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, sheetChild) {
+        return Transform.translate(
+          offset: Offset(0, (1 - value) * 26),
+          child: Opacity(
+            opacity: value,
+            child: sheetChild,
+          ),
+        );
+      },
+      child: child,
     );
   }
 
@@ -856,24 +1384,16 @@ class _ViewerScreenState extends State<ViewerScreen> {
     required bool isDark,
     required VoidCallback onTap,
   }) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark
-                ? Colors.white.withOpacity(0.1)
-                : Colors.black.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: IconButton(
-            icon: Icon(
-              icon,
-              color: isDark ? Colors.white : Colors.black,
-            ),
-            onPressed: onTap,
-          ),
+    final iconColor = isDark ? Colors.white : const Color(0xFF241C37);
+    return GlassContainer(
+      borderRadius: BorderRadius.circular(22),
+      blurSigma: 16,
+      child: SizedBox(
+        width: 50,
+        height: 50,
+        child: IconButton(
+          icon: Icon(icon, color: iconColor),
+          onPressed: onTap,
         ),
       ),
     );

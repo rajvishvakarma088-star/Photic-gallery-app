@@ -77,9 +77,15 @@ Widget buildGalleryGridTile({
   required Widget image,
   required VoidCallback onTap,
   required VoidCallback onDoubleTap,
+  VoidCallback? onLongPress,
+  GestureLongPressStartCallback? onLongPressStart,
+  GestureLongPressMoveUpdateCallback? onLongPressMoveUpdate,
+  GestureLongPressEndCallback? onLongPressEnd,
   required bool isFavorite,
   required bool isAnimating,
+  bool isSelected = false,
   Object? heroTag,
+  Key? tileKey,
 }) {
   final imageChild = ClipRRect(
     borderRadius: BorderRadius.circular(16),
@@ -93,12 +99,40 @@ Widget buildGalleryGridTile({
 
   return RepaintBoundary(
     child: GestureDetector(
+      key: tileKey,
       onTap: onTap,
       onDoubleTap: onDoubleTap,
+      onLongPress: onLongPress,
+      onLongPressStart: onLongPressStart,
+      onLongPressMoveUpdate: onLongPressMoveUpdate,
+      onLongPressEnd: onLongPressEnd,
       child: Stack(
         fit: StackFit.expand,
         children: [
           imageChild,
+          if (isSelected)
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.28),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: Colors.white,
+                    width: 2,
+                  ),
+                ),
+                child: const Align(
+                  alignment: Alignment.topLeft,
+                  child: Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.check_circle,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           if (isFavorite)
             const Positioned(
               top: 8,

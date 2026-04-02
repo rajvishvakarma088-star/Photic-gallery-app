@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'package:path/path.dart' as path;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -13,6 +13,7 @@ import 'gallery/gallery_section_builder.dart';
 import 'glass_container.dart';
 import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
+import 'services/recycle_bin_database.dart';
 import 'viewer_screen.dart';
 import 'video_viewer_screen.dart';
 import 'theme_provider.dart';
@@ -28,10 +29,12 @@ class _GalleryScreenState extends State<GalleryScreen>
     with WidgetsBindingObserver {
   final GalleryService service = GalleryService();
   final FavoritesDatabase favoritesDatabase = FavoritesDatabase.instance;
+  final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
   final ScrollController scrollController = ScrollController();
   final ScrollController videosScrollController = ScrollController();
   final ScrollController favoritesScrollController = ScrollController();
   final ScrollController albumsScrollController = ScrollController();
+  final ScrollController recycleBinScrollController = ScrollController();
   final PageStorageKey _galleryScrollKey = const PageStorageKey(
     'gallery-scroll',
   );
@@ -45,9 +48,14 @@ class _GalleryScreenState extends State<GalleryScreen>
   List<AssetEntity> images = [];
   List<AssetEntity> videos = [];
   List<AssetEntity> favoriteImages = [];
+  List<AssetEntity> recycleBinItems = [];
+  final Map<String, RecycleBinItem> recycleBinRecords = {};
   List<AlbumSummary> albums = [];
   final Set<String> favorites = {};
   final Set<String> animating = {};
+  final Set<String> recycleBinIds = {};
+  final Set<String> selectedAssetIds = {};
+  final Map<String, GlobalKey> _gridTileKeys = {};
 
   final Map<String, AssetEntityImageProvider> thumbnailProviderCache = {};
   final Set<String> warmedThumbnailKeys = {};
@@ -60,6 +68,8 @@ class _GalleryScreenState extends State<GalleryScreen>
   bool isLoadingMore = false;
   bool isLoadingMoreVideos = false;
   bool isLoadingAlbums = true;
+  bool isLoadingRecycleBin = true;
+  bool isRecycleActionInProgress = false;
   PermissionState? permissionState;
   bool hasMore = true;
   bool hasMoreVideos = true;
@@ -79,6 +89,11 @@ class _GalleryScreenState extends State<GalleryScreen>
   bool _pinchStepConsumed = false;
   bool _isPrefetchingNextPage = false;
   bool _isViewerTransitioning = false;
+  bool? _dragSelectionTargetValue;
+  final Set<String> _dragSelectionTouchedIds = {};
+  Timer? _dragAutoScrollTimer;
+  double _dragAutoScrollVelocity = 0;
+  Offset? _lastDragGlobalPosition;
   List<AssetEntity>? _prefetchedImages;
   int? _prefetchedPage;
   Timer? _thumbnailWarmupTimer;
@@ -86,6 +101,7 @@ class _GalleryScreenState extends State<GalleryScreen>
   int _lastWarmedEnd = -1;
 
   bool get _isPinching => _activePointers >= 2;
+  bool get isSelectionMode => selectedAssetIds.isNotEmpty;
 
   int get galleryThumbPx {
     // Keep one stable thumbnail size across grid changes so pinch-to-zoom
@@ -115,7 +131,9 @@ class _GalleryScreenState extends State<GalleryScreen>
     WidgetsBinding.instance.addObserver(this);
     scrollController.addListener(onScroll);
     videosScrollController.addListener(onScroll);
+    recycleBinScrollController.addListener(onScroll);
     loadFavorites();
+    unawaited(loadRecycleBin());
     unawaited(loadInitialMediaData());
   }
 
@@ -123,11 +141,13 @@ class _GalleryScreenState extends State<GalleryScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _thumbnailWarmupTimer?.cancel();
+    _dragAutoScrollTimer?.cancel();
     thumbnailProviderCache.clear();
     scrollController.dispose();
     videosScrollController.dispose();
     favoritesScrollController.dispose();
     albumsScrollController.dispose();
+    recycleBinScrollController.dispose();
     super.dispose();
   }
 
@@ -135,7 +155,9 @@ class _GalleryScreenState extends State<GalleryScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
     service.clearCache();
+    clearSelection();
     loadFavorites();
+    unawaited(loadRecycleBin());
     unawaited(loadInitialMediaData());
   }
 
@@ -193,7 +215,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
   }
 
-  Future<void> syncFavoriteImages() async {
+  Future<void> syncFavoriteImages({bool showLoading = true}) async {
     if (favorites.isEmpty) {
       if (!mounted) return;
       setState(() {
@@ -203,14 +225,921 @@ class _GalleryScreenState extends State<GalleryScreen>
       return;
     }
 
-    setState(() => isLoadingFavoriteImages = true);
-    final data = await service.fetchImagesByIds(favorites);
+    if (showLoading) {
+      setState(() => isLoadingFavoriteImages = true);
+    }
+    final data = filterRecycleBinItems(
+      await service.fetchImagesByIds(favorites),
+    );
     if (!mounted) return;
 
     setState(() {
       favoriteImages = data;
       isLoadingFavoriteImages = false;
     });
+  }
+
+  Future<void> loadRecycleBin() async {
+    setState(() {
+      isLoadingRecycleBin = true;
+    });
+
+    final items = await recycleBinDatabase.loadItems();
+    final ids = items.map((item) => item.assetId).toSet();
+    final assets = await service.fetchImagesByIds(ids);
+    final validIds = assets.map((asset) => asset.id).toSet();
+    final staleIds = ids.difference(validIds);
+    if (staleIds.isNotEmpty) {
+      await recycleBinDatabase.removeAssets(staleIds);
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      recycleBinIds
+        ..clear()
+        ..addAll(validIds);
+      recycleBinItems = assets;
+      recycleBinRecords
+        ..clear()
+        ..addEntries(
+          items
+              .where((item) => validIds.contains(item.assetId))
+              .map((item) => MapEntry(item.assetId, item)),
+        );
+      isLoadingRecycleBin = false;
+    });
+  }
+
+  void clearSelection() {
+    if (selectedAssetIds.isEmpty) return;
+    setState(() {
+      selectedAssetIds.clear();
+    });
+  }
+
+  void toggleSelection(AssetEntity asset) {
+    if (isRecycleActionInProgress) return;
+    setState(() {
+      if (!selectedAssetIds.add(asset.id)) {
+        selectedAssetIds.remove(asset.id);
+      }
+    });
+  }
+
+  void _applyDragSelection(AssetEntity asset) {
+    final targetValue = _dragSelectionTargetValue;
+    if (targetValue == null || _dragSelectionTouchedIds.contains(asset.id)) {
+      return;
+    }
+
+    _dragSelectionTouchedIds.add(asset.id);
+    final isSelected = selectedAssetIds.contains(asset.id);
+    if (isSelected == targetValue) return;
+
+    setState(() {
+      if (targetValue) {
+        selectedAssetIds.add(asset.id);
+      } else {
+        selectedAssetIds.remove(asset.id);
+      }
+    });
+  }
+
+  ScrollController? get _activeDragSelectionScrollController {
+    if (selectedIndex == 0) return scrollController;
+    if (selectedIndex == 1) return videosScrollController;
+    if (selectedIndex == 3) return favoritesScrollController;
+    return null;
+  }
+
+  void _startDragSelection(AssetEntity asset) {
+    if (isRecycleActionInProgress) return;
+    _dragSelectionTargetValue = !selectedAssetIds.contains(asset.id);
+    _dragSelectionTouchedIds
+      ..clear()
+      ..add(asset.id);
+
+    setState(() {
+      if (_dragSelectionTargetValue!) {
+        selectedAssetIds.add(asset.id);
+      } else {
+        selectedAssetIds.remove(asset.id);
+      }
+    });
+  }
+
+  void _updateDragSelection(
+    Offset globalPosition,
+    List<AssetEntity> visibleImages,
+  ) {
+    _lastDragGlobalPosition = globalPosition;
+    final targetValue = _dragSelectionTargetValue;
+    if (targetValue == null) return;
+
+    for (final asset in visibleImages) {
+      final key = _gridTileKeys[asset.id];
+      final context = key?.currentContext;
+      if (context == null) continue;
+      final box = context.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) continue;
+      final rect = box.localToGlobal(Offset.zero) & box.size;
+      if (rect.contains(globalPosition)) {
+        _applyDragSelection(asset);
+        break;
+      }
+    }
+
+    _updateDragAutoScroll(globalPosition, visibleImages);
+  }
+
+  void _endDragSelection() {
+    _dragSelectionTargetValue = null;
+    _dragSelectionTouchedIds.clear();
+    _lastDragGlobalPosition = null;
+    _dragAutoScrollVelocity = 0;
+    _dragAutoScrollTimer?.cancel();
+    _dragAutoScrollTimer = null;
+  }
+
+  void _updateDragAutoScroll(
+    Offset globalPosition,
+    List<AssetEntity> visibleImages,
+  ) {
+    final controller = _activeDragSelectionScrollController;
+    if (controller == null || !controller.hasClients) return;
+
+    final scrollContext = controller.position.context.notificationContext;
+    if (scrollContext == null) return;
+    final box = scrollContext.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+
+    final rect = box.localToGlobal(Offset.zero) & box.size;
+    const edgeThreshold = 92.0;
+    double velocity = 0;
+
+    if (globalPosition.dy < rect.top + edgeThreshold) {
+      velocity = -(((rect.top + edgeThreshold) - globalPosition.dy) /
+                  edgeThreshold)
+              .clamp(0.2, 1.0) *
+          18;
+    } else if (globalPosition.dy > rect.bottom - edgeThreshold) {
+      velocity = (((globalPosition.dy - (rect.bottom - edgeThreshold)) /
+                  edgeThreshold)
+              .clamp(0.2, 1.0)) *
+          18;
+    }
+
+    if (velocity == 0) {
+      _dragAutoScrollVelocity = 0;
+      _dragAutoScrollTimer?.cancel();
+      _dragAutoScrollTimer = null;
+      return;
+    }
+
+    _dragAutoScrollVelocity = velocity;
+    _dragAutoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final activeController = _activeDragSelectionScrollController;
+      final dragPosition = _lastDragGlobalPosition;
+      if (_dragSelectionTargetValue == null ||
+          activeController == null ||
+          !activeController.hasClients ||
+          dragPosition == null) {
+        _dragAutoScrollTimer?.cancel();
+        _dragAutoScrollTimer = null;
+        return;
+      }
+
+      final position = activeController.position;
+      final nextOffset = (position.pixels + _dragAutoScrollVelocity).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
+
+      if ((nextOffset - position.pixels).abs() < 0.1) return;
+      activeController.jumpTo(nextOffset);
+      _updateDragSelection(dragPosition, visibleImages);
+    });
+  }
+
+  Future<void> _refreshMediaAfterRecycleChange() async {
+    final galleryPageToKeep = currentPage;
+    final videoPageToKeep = currentVideoPage;
+    await Future.wait([
+      loadRecycleBin(),
+      loadImages(
+        permissionOverride: permissionState,
+        showLoading: false,
+        targetPage: galleryPageToKeep,
+      ),
+      loadVideos(
+        permissionOverride: permissionState,
+        showLoading: false,
+        targetPage: videoPageToKeep,
+      ),
+      syncFavoriteImages(showLoading: false),
+    ]);
+  }
+
+  void _toggleSelectAllForCurrentTab(List<AssetEntity> visibleImages) {
+    if (visibleImages.isEmpty || isRecycleActionInProgress) return;
+    final visibleIds = visibleImages.map((asset) => asset.id).toSet();
+    final allSelected = visibleIds.every(selectedAssetIds.contains);
+
+    setState(() {
+      if (allSelected) {
+        selectedAssetIds.removeAll(visibleIds);
+      } else {
+        selectedAssetIds.addAll(visibleIds);
+      }
+    });
+  }
+
+  void _showRecycleSnackBar(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  Future<bool> _confirmMoveToRecycleBin(int count) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      builder: (dialogContext) {
+        final colorScheme = Theme.of(dialogContext).colorScheme;
+        final isDark = Theme.of(dialogContext).brightness == Brightness.dark;
+
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: GlassContainer(
+            borderRadius: BorderRadius.circular(34),
+            blurSigma: 18,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withValues(
+                            alpha: isDark ? 0.12 : 0.32,
+                          ),
+                        ),
+                        child: Icon(
+                          Icons.delete_outline_rounded,
+                          color: colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          'Move To Recycle Bin?',
+                          style: TextStyle(
+                            color: colorScheme.onSurface,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    count == 1
+                        ? 'This item will be moved to the recycle bin and can be restored later.'
+                        : '$count items will be moved to the recycle bin and can be restored later.',
+                    style: TextStyle(
+                      color: colorScheme.onSurface.withValues(alpha: 0.76),
+                      height: 1.42,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(dialogContext, false),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            side: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.28),
+                            ),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(dialogContext, true),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Move'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    return result ?? false;
+  }
+
+  List<AssetEntity> _selectedAssetsFromVisibleItems() {
+    final source = <AssetEntity>[
+      ...images,
+      ...videos,
+      ...favoriteImages,
+      ...recycleBinItems,
+    ];
+    final byId = <String, AssetEntity>{};
+    for (final asset in source) {
+      byId[asset.id] = asset;
+    }
+
+    return selectedAssetIds
+        .map((id) => byId[id])
+        .whereType<AssetEntity>()
+        .toList(growable: false);
+  }
+
+  Future<void> moveSelectionToRecycleBin() async {
+    final ids = selectedAssetIds.toList(growable: false);
+    if (ids.isEmpty || isRecycleActionInProgress) return;
+    final shouldMove = await _confirmMoveToRecycleBin(ids.length);
+    if (!shouldMove || !mounted) return;
+
+    setState(() {
+      isRecycleActionInProgress = true;
+    });
+    try {
+      await recycleBinDatabase.addAssets(_selectedAssetsFromVisibleItems());
+      for (final id in ids) {
+        if (favorites.contains(id)) {
+          await favoritesDatabase.removeFavorite(id);
+        }
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        favorites.removeAll(ids);
+        favoriteImages = favoriteImages
+            .where((asset) => !ids.contains(asset.id))
+            .toList();
+        recycleBinIds.addAll(ids);
+        selectedAssetIds.clear();
+      });
+
+      await _refreshMediaAfterRecycleChange();
+      if (!mounted) return;
+      _showRecycleSnackBar(
+        '${ids.length} item${ids.length == 1 ? '' : 's'} moved to recycle bin',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          isRecycleActionInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<void> restoreSelectionFromRecycleBin() async {
+    final ids = selectedAssetIds.toList(growable: false);
+    if (ids.isEmpty || isRecycleActionInProgress) return;
+
+    setState(() {
+      isRecycleActionInProgress = true;
+    });
+    try {
+      await recycleBinDatabase.removeAssets(ids);
+      if (!mounted) return;
+
+      setState(() {
+        recycleBinIds.removeAll(ids);
+        selectedAssetIds.clear();
+      });
+
+      await _refreshMediaAfterRecycleChange();
+      if (!mounted) return;
+      _showRecycleSnackBar(
+        '${ids.length} item${ids.length == 1 ? '' : 's'} restored',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          isRecycleActionInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<void> deleteSelectionForever() async {
+    final ids = selectedAssetIds.toList(growable: false);
+    if (ids.isEmpty || isRecycleActionInProgress) return;
+
+    setState(() {
+      isRecycleActionInProgress = true;
+    });
+    try {
+      await PhotoManager.editor.deleteWithIds(ids);
+      await recycleBinDatabase.removeAssets(ids);
+      if (!mounted) return;
+
+      setState(() {
+        recycleBinIds.removeAll(ids);
+        selectedAssetIds.clear();
+      });
+
+      await _refreshMediaAfterRecycleChange();
+      if (!mounted) return;
+      _showRecycleSnackBar(
+        '${ids.length} item${ids.length == 1 ? '' : 's'} deleted forever',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          isRecycleActionInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _restoreRecycleBinItem(AssetEntity asset) async {
+    if (isRecycleActionInProgress) return;
+    setState(() {
+      isRecycleActionInProgress = true;
+    });
+    try {
+      await recycleBinDatabase.removeAssets([asset.id]);
+      if (!mounted) return;
+      await _refreshMediaAfterRecycleChange();
+      if (!mounted) return;
+      _showRecycleSnackBar('Restored successfully');
+    } finally {
+      if (mounted) {
+        setState(() {
+          isRecycleActionInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _deleteRecycleBinItemForever(AssetEntity asset) async {
+    if (isRecycleActionInProgress) return;
+    setState(() {
+      isRecycleActionInProgress = true;
+    });
+    try {
+      await PhotoManager.editor.deleteWithIds([asset.id]);
+      await recycleBinDatabase.removeAssets([asset.id]);
+      if (!mounted) return;
+      await _refreshMediaAfterRecycleChange();
+      if (!mounted) return;
+      _showRecycleSnackBar('Deleted forever');
+    } finally {
+      if (mounted) {
+        setState(() {
+          isRecycleActionInProgress = false;
+        });
+      }
+    }
+  }
+
+  String _formatRecycleDate(DateTime date) {
+    final time = TimeOfDay.fromDateTime(date).format(context);
+    return '${date.day}/${date.month}/${date.year} • $time';
+  }
+
+  Widget _buildRecycleSwipeBackground({
+    required bool restore,
+    required bool alignStart,
+  }) {
+    final color = restore ? const Color(0xFF2F9B72) : const Color(0xFFD55B65);
+    final icon = restore ? Icons.restore_rounded : Icons.delete_forever_rounded;
+    final label = restore ? 'Restore' : 'Delete Forever';
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        gradient: LinearGradient(
+          colors: [
+            color.withValues(alpha: 0.88),
+            color.withValues(alpha: 0.62),
+          ],
+          begin: alignStart ? Alignment.centerLeft : Alignment.centerRight,
+          end: alignStart ? Alignment.centerRight : Alignment.centerLeft,
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      alignment: alignStart ? Alignment.centerLeft : Alignment.centerRight,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: alignStart
+            ? [
+                Icon(icon, color: Colors.white),
+                const SizedBox(width: 8),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ]
+            : [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(icon, color: Colors.white),
+              ],
+      ),
+    );
+  }
+
+  Widget buildRecycleBinListView(ColorScheme colorScheme) {
+    return CustomScrollView(
+      controller: recycleBinScrollController,
+      physics: const BouncingScrollPhysics(),
+      cacheExtent: 1400,
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 120),
+          sliver: SliverFixedExtentList(
+            itemExtent: 116,
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final asset = recycleBinItems[index];
+                final record = recycleBinRecords[asset.id];
+                final filePath = record?.filePath ?? '';
+                final title = filePath.isEmpty
+                    ? 'Unknown file'
+                    : path.basename(filePath);
+                final subtitle = record == null
+                    ? 'Recently deleted'
+                    : _formatRecycleDate(record.deletedAt);
+                final isSelected = selectedAssetIds.contains(asset.id);
+
+                return RepaintBoundary(
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Dismissible(
+                      key: ValueKey('recycle-${asset.id}'),
+                      direction: isRecycleActionInProgress || isSelectionMode
+                          ? DismissDirection.none
+                          : DismissDirection.horizontal,
+                      background: _buildRecycleSwipeBackground(
+                        restore: false,
+                        alignStart: true,
+                      ),
+                      secondaryBackground: _buildRecycleSwipeBackground(
+                        restore: true,
+                        alignStart: false,
+                      ),
+                      confirmDismiss: (direction) async {
+                        if (direction == DismissDirection.endToStart) {
+                          await _restoreRecycleBinItem(asset);
+                        } else {
+                          await _deleteRecycleBinItemForever(asset);
+                        }
+                        return true;
+                      },
+                      child: Material(
+                        color: Colors.transparent,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onLongPress: () {
+                            toggleSelection(asset);
+                          },
+                          onTap: () async {
+                            if (isSelectionMode) {
+                              toggleSelection(asset);
+                              return;
+                            }
+                            await _showRecycleBinItemSheet(asset);
+                          },
+                          child: GlassContainer(
+                            borderRadius: BorderRadius.circular(26),
+                            enableBlur: false,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 160),
+                                    curve: Curves.easeOutCubic,
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(26),
+                                      border: Border.all(
+                                        color: isSelected
+                                            ? colorScheme.primary.withValues(
+                                                alpha: 0.42,
+                                              )
+                                            : Colors.transparent,
+                                        width: 1.2,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        ClipRRect(
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                          child: SizedBox(
+                                            width: 74,
+                                            height: 74,
+                                            child: Stack(
+                                              fit: StackFit.expand,
+                                              children: [
+                                                buildImage(asset, thumbPx: 128),
+                                                if (asset.type == AssetType.video)
+                                                  Align(
+                                                    alignment:
+                                                        Alignment.bottomRight,
+                                                    child: Padding(
+                                                      padding:
+                                                          const EdgeInsets.all(
+                                                            6,
+                                                          ),
+                                                      child: Container(
+                                                        padding:
+                                                            const EdgeInsets.symmetric(
+                                                              horizontal: 5,
+                                                              vertical: 2,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.black
+                                                              .withValues(
+                                                                alpha: 0.56,
+                                                              ),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                8,
+                                                              ),
+                                                        ),
+                                                        child: Text(
+                                                          _formatDuration(
+                                                            asset.videoDuration,
+                                                          ),
+                                                          style:
+                                                              const TextStyle(
+                                                                color: Colors.white,
+                                                                fontSize: 10,
+                                                                fontWeight:
+                                                                    FontWeight.w700,
+                                                              ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 14),
+                                        Expanded(
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                title,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: colorScheme.onSurface,
+                                                  fontSize: 17,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 6),
+                                              Text(
+                                                subtitle,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: colorScheme.onSurface
+                                                      .withValues(alpha: 0.68),
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                asset.type == AssetType.video
+                                                    ? 'Video • Swipe left to restore'
+                                                    : 'Photo • Swipe left to restore',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: colorScheme.onSurface
+                                                      .withValues(alpha: 0.56),
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Container(
+                                          width: 42,
+                                          height: 42,
+                                          decoration: BoxDecoration(
+                                            color: isSelected
+                                                ? colorScheme.primaryContainer
+                                                    .withValues(alpha: 0.98)
+                                                : colorScheme.primaryContainer
+                                                    .withValues(alpha: 0.92),
+                                            borderRadius:
+                                                BorderRadius.circular(14),
+                                          ),
+                                          child: Icon(
+                                            isSelected
+                                                ? Icons.check_rounded
+                                                : Icons.chevron_right_rounded,
+                                            color: isSelected
+                                                ? colorScheme
+                                                    .onPrimaryContainer
+                                                : colorScheme
+                                                    .onPrimaryContainer,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+              childCount: recycleBinItems.length,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showRecycleBinItemSheet(AssetEntity asset) async {
+    final record = recycleBinRecords[asset.id];
+    final filePath = record?.filePath ?? '';
+    final title = filePath.isEmpty ? 'Unknown file' : path.basename(filePath);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        final colorScheme = Theme.of(sheetContext).colorScheme;
+        return GlassContainer(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+          blurSigma: 18,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 46,
+                    height: 5,
+                    margin: const EdgeInsets.only(bottom: 18),
+                    decoration: BoxDecoration(
+                      color: colorScheme.onSurface.withValues(alpha: 0.24),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: SizedBox(
+                      height: 220,
+                      width: double.infinity,
+                      child: buildImage(asset, thumbPx: 320),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colorScheme.onSurface,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      record == null
+                          ? 'Recently deleted'
+                          : _formatRecycleDate(record.deletedAt),
+                      style: TextStyle(
+                        color: colorScheme.onSurface.withValues(alpha: 0.72),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  if (filePath.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        filePath,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colorScheme.onSurface.withValues(alpha: 0.56),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: isRecycleActionInProgress
+                              ? null
+                              : () async {
+                                  Navigator.pop(sheetContext);
+                                  await _restoreRecycleBinItem(asset);
+                                },
+                          icon: const Icon(Icons.restore_rounded),
+                          label: const Text('Restore'),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: isRecycleActionInProgress
+                              ? null
+                              : () async {
+                                  Navigator.pop(sheetContext);
+                                  await _deleteRecycleBinItemForever(asset);
+                                },
+                          icon: const Icon(Icons.delete_forever_rounded),
+                          label: const Text('Delete'),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  List<AssetEntity> filterRecycleBinItems(List<AssetEntity> items) {
+    if (recycleBinIds.isEmpty) return items;
+    return items
+        .where((asset) => !recycleBinIds.contains(asset.id))
+        .toList(growable: false);
   }
 
   Future<void> toggleFavorite(AssetEntity asset) async {
@@ -264,6 +1193,8 @@ class _GalleryScreenState extends State<GalleryScreen>
   Future<void> loadImages({
     bool loadMore = false,
     PermissionState? permissionOverride,
+    bool showLoading = true,
+    int? targetPage,
   }) async {
     if (loadMore) {
       if (isLoadingMore || isLoading || !hasMore || selectedIndex != 0) {
@@ -286,9 +1217,9 @@ class _GalleryScreenState extends State<GalleryScreen>
 
       setState(() => isLoadingMore = true);
     } else {
-      setState(() => isLoading = true);
-      currentPage = 0;
-      hasMore = true;
+      if (showLoading || images.isEmpty) {
+        setState(() => isLoading = true);
+      }
       _prefetchedImages = null;
       _prefetchedPage = null;
     }
@@ -313,10 +1244,41 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
 
     final nextPage = loadMore ? currentPage + 1 : 0;
-    final data = await service.fetchImages(
-      page: nextPage,
-      size: pageSize,
-    );
+    late final List<AssetEntity> data;
+    late final int resolvedPage;
+    late final bool resolvedHasMore;
+
+    if (loadMore) {
+      final rawData = await service.fetchImages(
+        page: nextPage,
+        size: pageSize,
+      );
+      data = filterRecycleBinItems(rawData);
+      resolvedPage = nextPage;
+      resolvedHasMore = rawData.length == pageSize;
+    } else {
+      final lastTargetPage = (targetPage ?? 0).clamp(0, 100000);
+      final collected = <AssetEntity>[];
+      var lastLoadedPage = 0;
+      var lastBatchCount = 0;
+
+      for (var page = 0; page <= lastTargetPage; page++) {
+        final rawPage = await service.fetchImages(
+          page: page,
+          size: pageSize,
+        );
+        lastLoadedPage = page;
+        lastBatchCount = rawPage.length;
+        collected.addAll(filterRecycleBinItems(rawPage));
+        if (rawPage.length < pageSize) {
+          break;
+        }
+      }
+
+      data = collected;
+      resolvedPage = data.isEmpty ? 0 : lastLoadedPage;
+      resolvedHasMore = lastBatchCount == pageSize;
+    }
 
     if (!mounted) return;
 
@@ -324,13 +1286,13 @@ class _GalleryScreenState extends State<GalleryScreen>
       if (loadMore) {
         images.addAll(data);
         isLoadingMore = false;
-        currentPage = nextPage;
-        hasMore = data.length == pageSize;
+        currentPage = resolvedPage;
+        hasMore = resolvedHasMore;
       } else {
         images = data;
         isLoading = false;
-        currentPage = data.isEmpty ? 0 : nextPage;
-        hasMore = data.length == pageSize;
+        currentPage = resolvedPage;
+        hasMore = resolvedHasMore;
       }
     });
 
@@ -344,14 +1306,16 @@ class _GalleryScreenState extends State<GalleryScreen>
   Future<void> loadVideos({
     bool loadMore = false,
     PermissionState? permissionOverride,
+    bool showLoading = true,
+    int? targetPage,
   }) async {
     if (loadMore) {
       if (isLoadingMoreVideos || isLoadingVideos || !hasMoreVideos || selectedIndex != 1) return;
       setState(() => isLoadingMoreVideos = true);
     } else {
-      setState(() => isLoadingVideos = true);
-      currentVideoPage = 0;
-      hasMoreVideos = true;
+      if (showLoading || videos.isEmpty) {
+        setState(() => isLoadingVideos = true);
+      }
     }
 
     if (!loadMore) {
@@ -371,20 +1335,48 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
 
     final nextPage = loadMore ? currentVideoPage + 1 : 0;
-    final data = await service.fetchVideos(page: nextPage, size: pageSize);
+    late final List<AssetEntity> data;
+    late final int resolvedPage;
+    late final bool resolvedHasMore;
+
+    if (loadMore) {
+      final rawData = await service.fetchVideos(page: nextPage, size: pageSize);
+      data = filterRecycleBinItems(rawData);
+      resolvedPage = nextPage;
+      resolvedHasMore = rawData.length == pageSize;
+    } else {
+      final lastTargetPage = (targetPage ?? 0).clamp(0, 100000);
+      final collected = <AssetEntity>[];
+      var lastLoadedPage = 0;
+      var lastBatchCount = 0;
+
+      for (var page = 0; page <= lastTargetPage; page++) {
+        final rawPage = await service.fetchVideos(page: page, size: pageSize);
+        lastLoadedPage = page;
+        lastBatchCount = rawPage.length;
+        collected.addAll(filterRecycleBinItems(rawPage));
+        if (rawPage.length < pageSize) {
+          break;
+        }
+      }
+
+      data = collected;
+      resolvedPage = data.isEmpty ? 0 : lastLoadedPage;
+      resolvedHasMore = lastBatchCount == pageSize;
+    }
     if (!mounted) return;
 
     setState(() {
       if (loadMore) {
         videos.addAll(data);
         isLoadingMoreVideos = false;
-        currentVideoPage = nextPage;
-        hasMoreVideos = data.length == pageSize;
+        currentVideoPage = resolvedPage;
+        hasMoreVideos = resolvedHasMore;
       } else {
         videos = data;
         isLoadingVideos = false;
-        currentVideoPage = data.isEmpty ? 0 : nextPage;
-        hasMoreVideos = data.length == pageSize;
+        currentVideoPage = resolvedPage;
+        hasMoreVideos = resolvedHasMore;
       }
     });
   }
@@ -405,10 +1397,11 @@ class _GalleryScreenState extends State<GalleryScreen>
 
     _isPrefetchingNextPage = true;
     try {
-      final data = await service.fetchImages(
+      final rawData = await service.fetchImages(
         page: targetPage,
         size: pageSize,
       );
+      final data = filterRecycleBinItems(rawData);
       if (!mounted || selectedIndex != 0) return;
       _prefetchedImages = data;
       _prefetchedPage = targetPage;
@@ -584,7 +1577,10 @@ class _GalleryScreenState extends State<GalleryScreen>
         backgroundColor: Colors.transparent,
         onDestinationSelected: (index) {
           if (index == selectedIndex) return;
-          setState(() => selectedIndex = index);
+          setState(() {
+            selectedIndex = index;
+            selectedAssetIds.clear();
+          });
         },
         destinations: [
           NavigationDestination(
@@ -611,6 +1607,15 @@ class _GalleryScreenState extends State<GalleryScreen>
             selectedIcon: const Icon(Icons.favorite),
             label: 'Favorites',
           ),
+          NavigationDestination(
+            icon: Badge.count(
+              count: recycleBinItems.length,
+              isLabelVisible: recycleBinItems.isNotEmpty,
+              child: const Icon(Icons.delete_outline_rounded),
+            ),
+            selectedIcon: const Icon(Icons.delete_rounded),
+            label: 'Recycle',
+          ),
         ],
       ),
     );
@@ -626,7 +1631,9 @@ class _GalleryScreenState extends State<GalleryScreen>
   }
 
   Future<void> openAlbum(AlbumSummary album) async {
-    final albumImages = await service.fetchAlbumImages(album.album);
+    final albumImages = filterRecycleBinItems(
+      await service.fetchAlbumImages(album.album),
+    );
     if (!mounted || albumImages.isEmpty) return;
 
     await Navigator.push(
@@ -634,6 +1641,7 @@ class _GalleryScreenState extends State<GalleryScreen>
       buildCinematicRoute(
         AlbumDetailScreen(
           title: album.name,
+          album: album.album,
           images: albumImages,
         ),
       ),
@@ -767,7 +1775,7 @@ class _GalleryScreenState extends State<GalleryScreen>
                   decelerationRate: ScrollDecelerationRate.fast,
                 ),
                 itemCount: featuredAlbums.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 14),
+                separatorBuilder: (context, index) => const SizedBox(width: 14),
                 itemBuilder: (context, index) {
                   final album = featuredAlbums[index];
                   return RepaintBoundary(
@@ -829,113 +1837,118 @@ class _GalleryScreenState extends State<GalleryScreen>
     List<AssetEntity> visibleImages,
     int absoluteIndex,
   ) {
-    final ImageProvider<Object>? previewProvider =
+    final ImageProvider<Object> previewProvider =
         _thumbnailProviderFor(asset, galleryThumbPx);
     final openingProvider = ViewerScreen.openingImageProvider(context, asset);
+    final isRecycleBinTab = selectedIndex == 4;
+    final isSelected = selectedAssetIds.contains(asset.id);
+    final tileKey = _gridTileKeys.putIfAbsent(asset.id, GlobalKey.new);
 
-    return RepaintBoundary(
-      child: GestureDetector(
-        onTap: () async {
-          _thumbnailWarmupTimer?.cancel();
-          _isViewerTransitioning = true;
-          
-          if (asset.type == AssetType.video) {
-            final videoList = visibleImages.where((e) => e.type == AssetType.video).toList();
-            var videoIndex = videoList.indexWhere((e) => e.id == asset.id);
-            if (videoIndex == -1) {
-              videoList.insert(0, asset);
-              videoIndex = 0;
-            }
-
-            await Navigator.push(
-              context,
-              buildCinematicRoute(
-                VideoViewerScreen(videos: videoList, initialIndex: videoIndex),
-              ),
-            );
-          } else {
-            // Warm up both preview and opening providers so the transition is smooth.
-            if (previewProvider != null) {
-              unawaited(precacheImage(previewProvider, context));
-            }
-            unawaited(precacheImage(openingProvider, context));
-
-            await Navigator.push(
-              context,
-              buildCinematicRoute(
-                ViewerScreen(
-                  images: visibleImages,
-                  index: absoluteIndex,
-                  initialPreviewProvider: previewProvider,
-                  initialViewerProvider: openingProvider,
+    return gallery_grid_widgets.buildGalleryGridTile(
+      asset: asset,
+      image: Stack(
+        fit: StackFit.expand,
+        children: [
+          buildImage(asset, thumbPx: galleryThumbPx),
+          if (asset.type == AssetType.video)
+            Positioned(
+              bottom: 8,
+              right: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(6),
                 ),
-              ),
-            );
-          }
-          if (!mounted) return;
-          _isViewerTransitioning = false;
-          _scheduleThumbnailWarmup();
-        },
-        onDoubleTap: () {
-          toggleFavorite(asset);
-        },
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Hero(
-                tag: asset.id,
-                child: buildImage(asset, thumbPx: galleryThumbPx),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 14),
+                    const SizedBox(width: 2),
+                    Text(
+                      _formatDuration(asset.videoDuration),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            if (asset.type == AssetType.video)
-              Positioned(
-                bottom: 8,
-                right: 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.6),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 14),
-                      const SizedBox(width: 2),
-                      Text(
-                        _formatDuration(asset.videoDuration),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            if (favorites.contains(asset.id))
-              const Positioned(
-                top: 8,
-                right: 8,
-                child: Icon(
-                  Icons.favorite,
-                  color: Colors.red,
-                ),
-              ),
-            if (animating.contains(asset.id))
-              const Center(
-                child: Icon(
-                  Icons.favorite,
-                  color: Colors.white,
-                  size: 60,
-                ),
-              ),
-          ],
-        ),
+        ],
       ),
+      onTap: () async {
+        if (isSelectionMode) {
+          toggleSelection(asset);
+          return;
+        }
+
+        _thumbnailWarmupTimer?.cancel();
+        _isViewerTransitioning = true;
+
+        if (asset.type == AssetType.video) {
+          final videoList =
+              visibleImages.where((e) => e.type == AssetType.video).toList();
+          var videoIndex = videoList.indexWhere((e) => e.id == asset.id);
+          if (videoIndex == -1) {
+            videoList.insert(0, asset);
+            videoIndex = 0;
+          }
+
+          final movedToRecycleBin = await Navigator.push<bool>(
+            context,
+            buildCinematicRoute(
+              VideoViewerScreen(videos: videoList, initialIndex: videoIndex),
+            ),
+          );
+          if (movedToRecycleBin == true && mounted) {
+            await _refreshMediaAfterRecycleChange();
+            if (!mounted) return;
+            _showRecycleSnackBar('Moved to recycle bin');
+          }
+        } else {
+          unawaited(precacheImage(previewProvider, context));
+          unawaited(precacheImage(openingProvider, context));
+
+          final movedToRecycleBin = await Navigator.push<bool>(
+            context,
+            buildCinematicRoute(
+              ViewerScreen(
+                images: visibleImages,
+                index: absoluteIndex,
+                initialPreviewProvider: previewProvider,
+                initialViewerProvider: openingProvider,
+              ),
+            ),
+          );
+          if (movedToRecycleBin == true && mounted) {
+            await _refreshMediaAfterRecycleChange();
+            if (!mounted) return;
+            _showRecycleSnackBar('Moved to recycle bin');
+          }
+        }
+        if (!mounted) return;
+        _isViewerTransitioning = false;
+        _scheduleThumbnailWarmup();
+      },
+      onDoubleTap: isRecycleBinTab ? () {} : () => toggleFavorite(asset),
+      onLongPress: () {},
+      onLongPressStart: (_) {
+        _startDragSelection(asset);
+      },
+      onLongPressMoveUpdate: (details) {
+        _updateDragSelection(details.globalPosition, visibleImages);
+      },
+      onLongPressEnd: (_) {
+        _endDragSelection();
+      },
+      isFavorite: !isRecycleBinTab && favorites.contains(asset.id),
+      isAnimating: !isRecycleBinTab && animating.contains(asset.id),
+      isSelected: isSelected,
+      heroTag: asset.id,
+      tileKey: tileKey,
     );
   }
 
@@ -1072,57 +2085,22 @@ class _GalleryScreenState extends State<GalleryScreen>
           _pinchAccumulator = 1.0;
           _pinchStepConsumed = false;
         },
-        child: Stack(
-          children: [
-            CustomScrollView(
-              key: controller == scrollController
-                  ? _galleryScrollKey
-                  : _favoritesScrollKey,
-              controller: controller,
-              cacheExtent: 600,
-              physics: _isPinching
-                  ? const NeverScrollableScrollPhysics()
-                  : const BouncingScrollPhysics(),
-              slivers: [
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(10, 2, 10, 110),
-                  sliver: SliverMainAxisGroup(slivers: slivers),
-                ),
-              ],
+        child: CustomScrollView(
+          key: controller == scrollController
+              ? _galleryScrollKey
+              : controller == favoritesScrollController
+                  ? _favoritesScrollKey
+                  : PageStorageKey('grid-$selectedIndex'),
+          controller: controller,
+          cacheExtent: 600,
+          physics: _isPinching
+              ? const NeverScrollableScrollPhysics()
+              : const BouncingScrollPhysics(),
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(10, 2, 10, 110),
+              sliver: SliverMainAxisGroup(slivers: slivers),
             ),
-            if (isLoadingMore && controller == scrollController)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 116,
-                child: IgnorePointer(
-                  child: Center(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: colorScheme.surface.withOpacity(0.88),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.18),
-                        ),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        child: SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.4,
-                            color: colorScheme.primary,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),
@@ -1138,6 +2116,33 @@ class _GalleryScreenState extends State<GalleryScreen>
       return KeyedSubtree(
         key: const ValueKey('albums'),
         child: buildAlbumsView(colorScheme, isDark),
+      );
+    }
+    if (selectedIndex == 4) {
+      if (isLoadingRecycleBin) {
+        return const KeyedSubtree(
+          key: ValueKey('loading-recycle'),
+          child: Center(child: CircularProgressIndicator()),
+        );
+      }
+      if (recycleBinItems.isEmpty) {
+        return KeyedSubtree(
+          key: const ValueKey('empty-recycle'),
+          child: Center(
+            child: Text(
+              'Recycle bin is empty',
+              style: TextStyle(
+                color: colorScheme.onSurface.withOpacity(0.8),
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        );
+      }
+      return KeyedSubtree(
+        key: const ValueKey('recycle-list'),
+        child: buildRecycleBinListView(colorScheme),
       );
     }
     if ((selectedIndex == 0 && isLoading) ||
@@ -1204,8 +2209,11 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
     if (visibleImages.isEmpty) {
       String emptyText = 'No images found';
-      if (selectedIndex == 1) emptyText = 'No videos found';
-      else if (selectedIndex == 3) emptyText = 'No favorite items yet';
+      if (selectedIndex == 1) {
+        emptyText = 'No videos found';
+      } else if (selectedIndex == 3) {
+        emptyText = 'No favorite items yet';
+      }
 
       return KeyedSubtree(
         key: ValueKey('empty-$selectedIndex'),
@@ -1223,8 +2231,11 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
     
     ScrollController currentController = scrollController;
-    if (selectedIndex == 1) currentController = videosScrollController;
-    else if (selectedIndex == 3) currentController = favoritesScrollController;
+    if (selectedIndex == 1) {
+      currentController = videosScrollController;
+    } else if (selectedIndex == 3) {
+      currentController = favoritesScrollController;
+    }
 
     return KeyedSubtree(
       key: ValueKey('grid-$selectedIndex'),
@@ -1243,11 +2254,16 @@ class _GalleryScreenState extends State<GalleryScreen>
     final colorScheme = Theme.of(context).colorScheme;
     final topBarColor =
         isDark ? const Color(0xFF120C24) : const Color(0xFFF1E8FF);
-    final titles = ['Gallery', 'Videos', 'Albums', 'Favorites'];
+    final titles = ['Gallery', 'Videos', 'Albums', 'Favorites', 'Recycle Bin'];
 
     List<AssetEntity> visibleImages = images;
-    if (selectedIndex == 1) visibleImages = videos;
-    else if (selectedIndex == 3) visibleImages = favoriteImages;
+    if (selectedIndex == 1) {
+      visibleImages = videos;
+    } else if (selectedIndex == 3) {
+      visibleImages = favoriteImages;
+    } else if (selectedIndex == 4) {
+      visibleImages = recycleBinItems;
+    }
 
     final overlayStyle = isDark
         ? SystemUiOverlayStyle.light
@@ -1257,6 +2273,13 @@ class _GalleryScreenState extends State<GalleryScreen>
       backgroundColor: Colors.transparent,
       extendBody: true,
       appBar: AppBar(
+        leading: isSelectionMode
+            ? IconButton(
+                tooltip: 'Close selection',
+                icon: const Icon(Icons.close_rounded),
+                onPressed: clearSelection,
+              )
+            : null,
         title: AnimatedSwitcher(
           duration: const Duration(milliseconds: 360),
           transitionBuilder: (child, animation) {
@@ -1272,8 +2295,10 @@ class _GalleryScreenState extends State<GalleryScreen>
             );
           },
           child: Text(
-            titles[selectedIndex],
-            key: ValueKey(selectedIndex),
+            isSelectionMode
+                ? '${selectedAssetIds.length} selected'
+                : titles[selectedIndex],
+            key: ValueKey('${selectedIndex}_${selectedAssetIds.length}'),
           ),
         ),
         backgroundColor: topBarColor,
@@ -1288,15 +2313,68 @@ class _GalleryScreenState extends State<GalleryScreen>
               isDark ? Brightness.light : Brightness.dark,
         ),
         actions: [
-          IconButton(
-            tooltip: isDark ? 'Light mode' : 'Dark mode',
-            icon: Icon(
-              isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+          if (isSelectionMode && selectedIndex != 2)
+            IconButton(
+              tooltip: visibleImages.isNotEmpty &&
+                      visibleImages.every((asset) => selectedAssetIds.contains(asset.id))
+                  ? 'Deselect all'
+                  : 'Select all',
+              icon: Icon(
+                visibleImages.isNotEmpty &&
+                        visibleImages.every((asset) => selectedAssetIds.contains(asset.id))
+                    ? Icons.remove_done_rounded
+                    : Icons.select_all_rounded,
+              ),
+              onPressed: () => _toggleSelectAllForCurrentTab(visibleImages),
             ),
-            onPressed: () {
-              context.read<ThemeProvider>().toggleTheme();
-            },
-          )
+          if (isSelectionMode && selectedIndex == 4)
+            IconButton(
+              tooltip: 'Restore',
+              icon: const Icon(Icons.restore_rounded),
+              onPressed: isRecycleActionInProgress
+                  ? null
+                  : restoreSelectionFromRecycleBin,
+            ),
+          if (isSelectionMode && selectedIndex == 4)
+            IconButton(
+              tooltip: 'Delete forever',
+              icon: const Icon(Icons.delete_forever_rounded),
+              onPressed: isRecycleActionInProgress
+                  ? null
+                  : deleteSelectionForever,
+            ),
+          if (selectedIndex == 4 && !isSelectionMode)
+            Padding(
+              padding: const EdgeInsets.only(right: 14),
+              child: Center(
+                child: Text(
+                  'Tap for actions • Swipe restore/delete',
+                  style: TextStyle(
+                    color: colorScheme.onSurface.withValues(alpha: 0.7),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          if (isSelectionMode && selectedIndex != 4 && selectedIndex != 2)
+            IconButton(
+              tooltip: 'Move to recycle bin',
+              icon: const Icon(Icons.delete_rounded),
+              onPressed: isRecycleActionInProgress
+                  ? null
+                  : moveSelectionToRecycleBin,
+            ),
+          if (!isSelectionMode)
+            IconButton(
+              tooltip: isDark ? 'Light mode' : 'Dark mode',
+              icon: Icon(
+                isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+              ),
+              onPressed: () {
+                context.read<ThemeProvider>().toggleTheme();
+              },
+            ),
         ],
       ),
       body: Stack(

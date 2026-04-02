@@ -128,6 +128,39 @@ class GalleryService {
     return images;
   }
 
+  Future<List<AssetEntity>> fetchAlbumVideos(
+    AssetPathEntity album, {
+    int page = 0,
+    int size = 120,
+  }) async {
+    if (!await _hasPermission()) return [];
+
+    final videoAlbums = await PhotoManager.getAssetPathList(
+      type: RequestType.video,
+      hasAll: true,
+      filterOption: _galleryFilter,
+    );
+
+    AssetPathEntity? matchingAlbum;
+    for (final candidate in videoAlbums) {
+      if (candidate.id == album.id || candidate.name == album.name) {
+        matchingAlbum = candidate;
+        break;
+      }
+
+      if (_normalizeAlbumName(candidate.name) == _normalizeAlbumName(album.name)) {
+        matchingAlbum = candidate;
+        break;
+      }
+    }
+
+    if (matchingAlbum == null) return [];
+
+    final videos = await matchingAlbum.getAssetListPaged(page: page, size: size);
+    videos.sort(compareAssetsByNewestFirst);
+    return videos;
+  }
+
   Future<List<AssetEntity>> fetchImagesByIds(Set<String> assetIds) async {
     if (assetIds.isEmpty || !await _hasPermission()) return [];
 
