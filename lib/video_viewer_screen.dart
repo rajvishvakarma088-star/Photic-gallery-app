@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 import 'package:share_plus/share_plus.dart';
 import 'glass_container.dart';
 import 'services/recycle_bin_database.dart';
+import 'services/vault_service.dart';
 
 class VideoViewerScreen extends StatefulWidget {
   final List<AssetEntity> videos;
@@ -24,6 +25,7 @@ class VideoViewerScreen extends StatefulWidget {
 
 class _VideoViewerScreenState extends State<VideoViewerScreen> {
   final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
+  final VaultService vaultService = VaultService.instance;
   final ValueNotifier<double> verticalDragNotifier = ValueNotifier<double>(0);
   final Map<int, VideoPlayerController> _videoControllers = {};
   late PageController pageController;
@@ -69,17 +71,11 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-        ),
+        SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
       );
   }
 
-  Future<void> _shareCurrentVideo({
-    String? text,
-    String? subject,
-  }) async {
+  Future<void> _shareCurrentVideo({String? text, String? subject}) async {
     final file = await widget.videos[currentIndex].file;
     if (file == null) {
       _showViewerSnackBar('Video file not available');
@@ -87,11 +83,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
     }
 
     await SharePlus.instance.share(
-      ShareParams(
-        files: [XFile(file.path)],
-        text: text,
-        subject: subject,
-      ),
+      ShareParams(files: [XFile(file.path)], text: text, subject: subject),
     );
   }
 
@@ -132,88 +124,93 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
       builder: (sheetContext) {
         return _buildAnimatedSheet(
           child: GlassContainer(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
-          blurSigma: 20,
-          child: SafeArea(
-            top: false,
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                  Center(
-                    child: Container(
-                      width: 44,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: textColor.withValues(alpha: 0.22),
-                        borderRadius: BorderRadius.circular(99),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
-                    'Playback Speed',
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 21,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Choose how fast this video should play.',
-                    style: TextStyle(
-                      color: textColor.withValues(alpha: 0.7),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: speeds.map((speed) {
-                      final isActive =
-                          (controller.value.playbackSpeed - speed).abs() < 0.001;
-                      return GestureDetector(
-                        onTap: () async {
-                          HapticFeedback.selectionClick();
-                          await controller.setPlaybackSpeed(speed);
-                          if (!mounted || !sheetContext.mounted) return;
-                          Navigator.pop(sheetContext);
-                          setState(() {});
-                        },
-                        child: GlassContainer(
-                          borderRadius: BorderRadius.circular(18),
-                          enableBlur: false,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                            child: Text(
-                              '${speed}x',
-                              style: TextStyle(
-                                color: isActive
-                                    ? (isDark
-                                          ? const Color(0xFFDCCFFF)
-                                          : const Color(0xFF5D44D6))
-                                    : textColor,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+            blurSigma: 20,
+            child: SafeArea(
+              top: false,
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 44,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: textColor.withValues(alpha: 0.22),
+                            borderRadius: BorderRadius.circular(99),
                           ),
                         ),
-                      );
-                    }).toList(growable: false),
+                      ),
+                      const SizedBox(height: 18),
+                      Text(
+                        'Playback Speed',
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Choose how fast this video should play.',
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.7),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: speeds
+                            .map((speed) {
+                              final isActive =
+                                  (controller.value.playbackSpeed - speed)
+                                      .abs() <
+                                  0.001;
+                              return GestureDetector(
+                                onTap: () async {
+                                  HapticFeedback.selectionClick();
+                                  await controller.setPlaybackSpeed(speed);
+                                  if (!mounted || !sheetContext.mounted) return;
+                                  Navigator.pop(sheetContext);
+                                  setState(() {});
+                                },
+                                child: GlassContainer(
+                                  borderRadius: BorderRadius.circular(18),
+                                  enableBlur: false,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 12,
+                                    ),
+                                    child: Text(
+                                      '${speed}x',
+                                      style: TextStyle(
+                                        color: isActive
+                                            ? (isDark
+                                                  ? const Color(0xFFDCCFFF)
+                                                  : const Color(0xFF5D44D6))
+                                            : textColor,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            })
+                            .toList(growable: false),
+                      ),
+                    ],
                   ),
-                  ],
                 ),
               ),
             ),
           ),
-        ));
+        );
       },
     );
   }
@@ -228,120 +225,130 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
         final textColor = isDark ? Colors.white : const Color(0xFF221B34);
         return _buildAnimatedSheet(
           child: GlassContainer(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
-          blurSigma: 22,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
-            child: SafeArea(
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                  Container(
-                    width: 44,
-                    height: 5,
-                    margin: const EdgeInsets.only(bottom: 20),
-                    decoration: BoxDecoration(
-                      color: textColor.withValues(alpha: 0.22),
-                      borderRadius: BorderRadius.circular(99),
-                    ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+            blurSigma: 22,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
+              child: SafeArea(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 5,
+                        margin: const EdgeInsets.only(bottom: 20),
+                        decoration: BoxDecoration(
+                          color: textColor.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                      ),
+                      Text(
+                        'Video Actions',
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Playback tools and quick actions for this video.',
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.68),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      _buildMenuSectionLabel(
+                        title: 'Playback',
+                        color: textColor,
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: hideViewerChrome
+                            ? Icons.fullscreen_exit_rounded
+                            : Icons.fullscreen_rounded,
+                        title: hideViewerChrome
+                            ? 'Exit Full Screen'
+                            : 'Full Screen Playback',
+                        subtitle: 'Hide or show the viewer chrome',
+                        onTap: () async {
+                          Navigator.pop(context);
+                          await _toggleImmersivePlayback();
+                        },
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.speed_rounded,
+                        title: 'Playback Speed',
+                        subtitle: '0.5x to 2.0x speed control',
+                        onTap: () async {
+                          Navigator.pop(context);
+                          await _showPlaybackSpeedSheet(isDark);
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _buildMenuSectionLabel(
+                        title: 'Sharing',
+                        color: textColor,
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.open_in_new_rounded,
+                        title: 'Open With App',
+                        subtitle: 'Send this video into another app',
+                        onTap: () async {
+                          Navigator.pop(context);
+                          await openWithAnotherApp();
+                        },
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.share_rounded,
+                        title: 'Share Video',
+                        subtitle: 'Share this clip anywhere',
+                        onTap: () {
+                          Navigator.pop(context);
+                          shareAsset();
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _buildMenuSectionLabel(
+                        title: 'Privacy',
+                        color: textColor,
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.visibility_off_rounded,
+                        title: 'Move to Vault',
+                        subtitle: 'Hide this video from the gallery',
+                        onTap: () {
+                          Navigator.pop(context);
+                          hideAsset();
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _buildMenuSectionLabel(title: 'Delete', color: textColor),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.delete_rounded,
+                        title: 'Move to Recycle Bin',
+                        subtitle: 'Remove it now, restore it later',
+                        destructive: true,
+                        onTap: () {
+                          Navigator.pop(context);
+                          deleteAsset();
+                        },
+                      ),
+                    ],
                   ),
-                  Text(
-                    'Video Actions',
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Playback tools and quick actions for this video.',
-                    style: TextStyle(
-                      color: textColor.withValues(alpha: 0.68),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  _buildMenuSectionLabel(title: 'Playback', color: textColor),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: hideViewerChrome
-                        ? Icons.fullscreen_exit_rounded
-                        : Icons.fullscreen_rounded,
-                    title: hideViewerChrome
-                        ? 'Exit Full Screen'
-                        : 'Full Screen Playback',
-                    subtitle: 'Hide or show the viewer chrome',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await _toggleImmersivePlayback();
-                    },
-                  ),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.speed_rounded,
-                    title: 'Playback Speed',
-                    subtitle: '0.5x to 2.0x speed control',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await _showPlaybackSpeedSheet(isDark);
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  _buildMenuSectionLabel(title: 'Sharing', color: textColor),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.open_in_new_rounded,
-                    title: 'Open With App',
-                    subtitle: 'Send this video into another app',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await openWithAnotherApp();
-                    },
-                  ),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.share_rounded,
-                    title: 'Share Video',
-                    subtitle: 'Share this clip anywhere',
-                    onTap: () {
-                      Navigator.pop(context);
-                      shareAsset();
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  _buildMenuSectionLabel(title: 'Privacy', color: textColor),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.visibility_off_rounded,
-                    title: 'Move to Vault',
-                    subtitle: 'Hide this video from the gallery',
-                    onTap: () {
-                      Navigator.pop(context);
-                      hideAsset();
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  _buildMenuSectionLabel(title: 'Delete', color: textColor),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.delete_rounded,
-                    title: 'Move to Recycle Bin',
-                    subtitle: 'Remove it now, restore it later',
-                    destructive: true,
-                    onTap: () {
-                      Navigator.pop(context);
-                      deleteAsset();
-                    },
-                  ),
-                  ]
                 ),
-              )
-            )
-          )
-        ));
-      }
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -353,9 +360,18 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
   }
 
   Future<void> hideAsset() async {
-     ScaffoldMessenger.of(context).showSnackBar(
-       const SnackBar(content: Text('Moved to Private Vault'), behavior: SnackBarBehavior.floating),
-     );
+    try {
+      await vaultService.moveAssetToVault(widget.videos[currentIndex]);
+      if (!mounted) return;
+      Navigator.pop(context, 'vault');
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Move to Safe Folder failed'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Future<void> deleteAsset() async {
@@ -457,7 +473,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
     try {
       await recycleBinDatabase.addAsset(widget.videos[currentIndex]);
       if (!mounted) return;
-      Navigator.pop(context, true);
+      Navigator.pop(context, 'recycle');
     } finally {
       if (mounted) {
         setState(() {
@@ -487,7 +503,8 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
             _buildBottomActionItem(
               isDark: isDark,
               icon: Icons.speed_rounded,
-              label: '${speed.toStringAsFixed(speed.truncateToDouble() == speed ? 0 : 2)}x',
+              label:
+                  '${speed.toStringAsFixed(speed.truncateToDouble() == speed ? 0 : 2)}x',
               onTap: () => _showPlaybackSpeedSheet(isDark),
             ),
             _buildBottomActionItem(
@@ -625,56 +642,54 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                 ],
               ),
               child: Row(
-              children: [
-                Container(
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    color: iconBg,
-                    borderRadius: BorderRadius.circular(16),
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: iconBg,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(icon, color: textColor),
                   ),
-                  child: Icon(icon, color: textColor),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          color: textColor,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: TextStyle(
+                            color: textColor,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          color: textColor.withValues(alpha: 0.7),
-                          height: 1.3,
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            color: textColor.withValues(alpha: 0.7),
+                            height: 1.3,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: textColor.withValues(alpha: 0.72),
-                ),
-              ],
-            )),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: textColor.withValues(alpha: 0.72),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildMenuSectionLabel({
-    required String title,
-    required Color color,
-  }) {
+  Widget _buildMenuSectionLabel({required String title, required Color color}) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 2, 4, 10),
       child: Text(
@@ -697,10 +712,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
       builder: (context, value, sheetChild) {
         return Transform.translate(
           offset: Offset(0, (1 - value) * 26),
-          child: Opacity(
-            opacity: value,
-            child: sheetChild,
-          ),
+          child: Opacity(opacity: value, child: sheetChild),
         );
       },
       child: child,
@@ -723,11 +735,13 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
             builder: (context, verticalDrag, _) {
               final dismissProgress = (verticalDrag / 220).clamp(0.0, 1.0);
               return Container(
-                color: Colors.black.withOpacity((1.0 - dismissProgress).clamp(0.0, 1.0)),
+                color: Colors.black.withOpacity(
+                  (1.0 - dismissProgress).clamp(0.0, 1.0),
+                ),
               );
             },
           ),
-          
+
           GestureDetector(
             onTap: () {
               setState(() {
@@ -739,7 +753,8 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
               final newDrag = verticalDragNotifier.value + details.delta.dy;
               if (newDrag > 0) {
                 verticalDragNotifier.value =
-                    (verticalDragNotifier.value + (details.delta.dy * 0.72)).clamp(0.0, 260.0);
+                    (verticalDragNotifier.value + (details.delta.dy * 0.72))
+                        .clamp(0.0, 260.0);
               }
             },
             onVerticalDragEnd: (details) {
@@ -755,7 +770,10 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
             child: ValueListenableBuilder<double>(
               valueListenable: verticalDragNotifier,
               builder: (context, verticalDrag, _) {
-                final scale = (1.0 - (verticalDrag.abs() / 1000)).clamp(0.65, 1.0);
+                final scale = (1.0 - (verticalDrag.abs() / 1000)).clamp(
+                  0.65,
+                  1.0,
+                );
                 final borderRadius = (1.0 - scale) * 100;
 
                 return Transform.translate(
@@ -803,7 +821,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
               },
             ),
           ),
-          
+
           if (!hideViewerChrome && showViewerChrome)
             Positioned(
               top: 50,
@@ -824,10 +842,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                     width: 50,
                     height: 50,
                     child: IconButton(
-                      icon: const Icon(
-                        Icons.arrow_back,
-                        color: Colors.white,
-                      ),
+                      icon: const Icon(Icons.arrow_back, color: Colors.white),
                       onPressed: () => Navigator.pop(context),
                     ),
                   ),
@@ -865,7 +880,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                 ),
               ),
             ),
-          
+
           if (!hideViewerChrome && showViewerChrome)
             Positioned(
               left: 16,
@@ -995,13 +1010,13 @@ class _VideoPageState extends State<_VideoPage> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator(color: Colors.white));
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      );
     }
     return AspectRatio(
       aspectRatio: _videoPlayerController!.value.aspectRatio,
-      child: Chewie(
-        controller: _chewieController!,
-      ),
+      child: Chewie(controller: _chewieController!),
     );
   }
 }
@@ -1092,7 +1107,10 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
                   children: [
                     IconButton(
                       iconSize: 42,
-                      icon: const Icon(Icons.replay_10_rounded, color: Colors.white),
+                      icon: const Icon(
+                        Icons.replay_10_rounded,
+                        color: Colors.white,
+                      ),
                       onPressed: () => _skip(-10),
                     ),
                     const SizedBox(width: 32),
@@ -1112,7 +1130,9 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
                           shape: BoxShape.circle,
                         ),
                         child: Icon(
-                          _controller.value.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          _controller.value.isPlaying
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
                           size: 48,
                           color: Colors.white,
                         ),
@@ -1121,7 +1141,10 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
                     const SizedBox(width: 32),
                     IconButton(
                       iconSize: 42,
-                      icon: const Icon(Icons.forward_10_rounded, color: Colors.white),
+                      icon: const Icon(
+                        Icons.forward_10_rounded,
+                        color: Colors.white,
+                      ),
                       onPressed: () => _skip(10),
                     ),
                   ],
@@ -1131,12 +1154,19 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
               Positioned(
                 left: 20,
                 right: 20,
-                bottom: (widget.immersiveMode ? 36 : 110) +
+                bottom:
+                    (widget.immersiveMode ? 36 : 110) +
                     MediaQuery.of(context).padding.bottom,
                 child: Row(
                   children: [
-                    Text(_formatDuration(_controller.value.position), 
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text(
+                      _formatDuration(_controller.value.position),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     const SizedBox(width: 14),
                     Expanded(
                       child: VideoProgressIndicator(
@@ -1151,8 +1181,14 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
                       ),
                     ),
                     const SizedBox(width: 14),
-                    Text(_formatDuration(_controller.value.duration), 
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                    Text(
+                      _formatDuration(_controller.value.duration),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ],
                 ),
               ),

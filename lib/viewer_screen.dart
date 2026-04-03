@@ -13,6 +13,7 @@ import 'package:pro_image_editor/pro_image_editor.dart';
 
 import 'glass_container.dart';
 import 'services/recycle_bin_database.dart';
+import 'services/vault_service.dart';
 
 class ViewerScreen extends StatefulWidget {
   final List<AssetEntity> images;
@@ -50,6 +51,7 @@ class ViewerScreen extends StatefulWidget {
 
 class _ViewerScreenState extends State<ViewerScreen> {
   final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
+  final VaultService vaultService = VaultService.instance;
   late PageController controller;
   final ScrollController thumbnailScrollController = ScrollController();
   final ValueNotifier<int> currentIndexNotifier = ValueNotifier<int>(0);
@@ -139,35 +141,34 @@ class _ViewerScreenState extends State<ViewerScreen> {
   void warmCurrentThenNeighbors(int centerIndex) {
     precacheViewerImage(centerIndex);
     deferredNeighborWarmupTimer?.cancel();
-    deferredNeighborWarmupTimer = Timer(
-      const Duration(milliseconds: 120),
-      () {
-        if (!mounted) return;
-        precacheViewerImage(centerIndex - 1);
-        precacheViewerImage(centerIndex + 1);
-      },
-    );
+    deferredNeighborWarmupTimer = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted) return;
+      precacheViewerImage(centerIndex - 1);
+      precacheViewerImage(centerIndex + 1);
+    });
   }
 
   void syncThumbnailStrip([bool animated = true]) {
     if (!thumbnailScrollController.hasClients) return;
 
     final viewport = thumbnailScrollController.position.viewportDimension;
-    
+
     // Calculate max extent manually to avoid ListView layout thrashing on large galleries.
     final itemsCount = widget.images.length;
-    final totalWidth = (itemsCount * thumbnailItemWidth) +
+    final totalWidth =
+        (itemsCount * thumbnailItemWidth) +
         ((itemsCount > 0 ? itemsCount - 1 : 0) * thumbnailSpacing) +
         20.0;
-    final calculatedMaxExtent = (totalWidth - viewport).clamp(0.0, double.infinity);
+    final calculatedMaxExtent = (totalWidth - viewport).clamp(
+      0.0,
+      double.infinity,
+    );
 
     final targetOffset =
         ((currentIndex * (thumbnailItemWidth + thumbnailSpacing)) -
                 ((viewport - thumbnailItemWidth) / 2))
-            .clamp(
-      0.0,
-      calculatedMaxExtent,
-    ).toDouble();
+            .clamp(0.0, calculatedMaxExtent)
+            .toDouble();
 
     if (animated) {
       thumbnailScrollController.animateTo(
@@ -208,12 +209,13 @@ class _ViewerScreenState extends State<ViewerScreen> {
     SystemChrome.setSystemUIOverlayStyle(
       SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
-        systemNavigationBarColor:
-            isDark ? Colors.black : const Color(0xFFF0E6FF),
-        statusBarIconBrightness:
-            isDark ? Brightness.light : Brightness.dark,
-        systemNavigationBarIconBrightness:
-            isDark ? Brightness.light : Brightness.dark,
+        systemNavigationBarColor: isDark
+            ? Colors.black
+            : const Color(0xFFF0E6FF),
+        statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+        systemNavigationBarIconBrightness: isDark
+            ? Brightness.light
+            : Brightness.dark,
       ),
     );
   }
@@ -320,14 +322,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       deferredNeighborWarmupTimer?.cancel();
-      deferredNeighborWarmupTimer = Timer(
-        const Duration(milliseconds: 90),
-        () {
-          if (!mounted) return;
-          precacheViewerImage(currentIndex - 1);
-          precacheViewerImage(currentIndex + 1);
-        },
-      );
+      deferredNeighborWarmupTimer = Timer(const Duration(milliseconds: 90), () {
+        if (!mounted) return;
+        precacheViewerImage(currentIndex - 1);
+        precacheViewerImage(currentIndex + 1);
+      });
       syncThumbnailStrip(false);
       scheduleThumbnailStripHide();
     });
@@ -366,8 +365,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
             builder: (context, verticalDrag, _) {
               final dismissProgress = (verticalDrag / 220).clamp(0.0, 1.0);
               return Container(
-                color: (isDark ? Colors.black : Colors.white)
-                    .withOpacity((1.0 - dismissProgress).clamp(0.0, 1.0)),
+                color: (isDark ? Colors.black : Colors.white).withOpacity(
+                  (1.0 - dismissProgress).clamp(0.0, 1.0),
+                ),
               );
             },
           ),
@@ -396,10 +396,12 @@ class _ViewerScreenState extends State<ViewerScreen> {
                       return;
                     }
 
-                    final newDrag = verticalDragNotifier.value + details.delta.dy;
+                    final newDrag =
+                        verticalDragNotifier.value + details.delta.dy;
                     if (newDrag > 0 && !showDetails) {
                       verticalDragNotifier.value =
-                          (verticalDragNotifier.value + (details.delta.dy * 0.72))
+                          (verticalDragNotifier.value +
+                                  (details.delta.dy * 0.72))
                               .clamp(0.0, 260.0);
                     }
                   },
@@ -425,7 +427,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
                           valueListenable: upwardDragNotifier,
                           builder: (context, upwardDrag, __) {
                             final totalDrag = verticalDrag + upwardDrag;
-                            final scale = (1.0 - (totalDrag / 1000)).clamp(0.65, 1.0);
+                            final scale = (1.0 - (totalDrag / 1000)).clamp(
+                              0.65,
+                              1.0,
+                            );
                             final borderRadius = (1.0 - scale) * 100;
 
                             return Transform.translate(
@@ -436,7 +441,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
                               child: Transform.scale(
                                 scale: scale,
                                 child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(borderRadius),
+                                  borderRadius: BorderRadius.circular(
+                                    borderRadius,
+                                  ),
                                   child: PhotoViewGallery.builder(
                                     pageController: controller,
                                     itemCount: widget.images.length,
@@ -444,38 +451,40 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                       color: Colors.transparent,
                                     ),
                                     onPageChanged: (index) {
-                                  currentIndex = index;
-                                  currentIndexNotifier.value = index;
-                                  warmCurrentThenNeighbors(index);
-                                  showThumbnailStripTemporarily();
-                                  syncThumbnailStrip();
-                                },
-                                loadingBuilder: (context, event) => const SizedBox(),
-                                builder: (context, index) {
-                                  final asset = widget.images[index];
-                                  return PhotoViewGalleryPageOptions(
-                                    controller: photoController,
-                                    imageProvider: currentPageImageProvider(
-                                      asset,
-                                      index,
-                                    ),
-                                    heroAttributes: PhotoViewHeroAttributes(
-                                      tag: asset.id,
-                                    ),
-                                    minScale:
-                                        PhotoViewComputedScale.contained,
-                                    initialScale:
-                                        PhotoViewComputedScale.contained,
-                                    maxScale:
-                                        PhotoViewComputedScale.covered * 2.4,
-                                    filterQuality: FilterQuality.low,
-                                  );
-                                },
+                                      currentIndex = index;
+                                      currentIndexNotifier.value = index;
+                                      warmCurrentThenNeighbors(index);
+                                      showThumbnailStripTemporarily();
+                                      syncThumbnailStrip();
+                                    },
+                                    loadingBuilder: (context, event) =>
+                                        const SizedBox(),
+                                    builder: (context, index) {
+                                      final asset = widget.images[index];
+                                      return PhotoViewGalleryPageOptions(
+                                        controller: photoController,
+                                        imageProvider: currentPageImageProvider(
+                                          asset,
+                                          index,
+                                        ),
+                                        heroAttributes: PhotoViewHeroAttributes(
+                                          tag: asset.id,
+                                        ),
+                                        minScale:
+                                            PhotoViewComputedScale.contained,
+                                        initialScale:
+                                            PhotoViewComputedScale.contained,
+                                        maxScale:
+                                            PhotoViewComputedScale.covered *
+                                            2.4,
+                                        filterQuality: FilterQuality.low,
+                                      );
+                                    },
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        );
-                      },
+                            );
+                          },
                         );
                       },
                     ),
@@ -484,120 +493,125 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
                 // 🔙 MENU BUTTON
                 if (showViewerChrome)
-                Positioned(
-                  top: 50,
-                  right: 20,
-                  child: ValueListenableBuilder<double>(
-                    valueListenable: verticalDragNotifier,
-                    builder: (context, drag, child) {
-                      return AnimatedOpacity(
-                        duration: const Duration(milliseconds: 100),
-                        opacity: drag > 20 ? 0 : 1.0,
-                        child: child,
-                      );
-                    },
-                    child: glassButton(
-                      icon: Icons.more_vert_rounded,
-                      isDark: isDark,
-                      onTap: () => showContextMenu(isDark),
+                  Positioned(
+                    top: 50,
+                    right: 20,
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: verticalDragNotifier,
+                      builder: (context, drag, child) {
+                        return AnimatedOpacity(
+                          duration: const Duration(milliseconds: 100),
+                          opacity: drag > 20 ? 0 : 1.0,
+                          child: child,
+                        );
+                      },
+                      child: glassButton(
+                        icon: Icons.more_vert_rounded,
+                        isDark: isDark,
+                        onTap: () => showContextMenu(isDark),
+                      ),
                     ),
                   ),
-                ),
 
                 // 🔙 BACK BUTTON
                 if (showViewerChrome)
-                Positioned(
-                  top: 50,
-                  left: 20,
-                  child: ValueListenableBuilder<double>(
-                    valueListenable: verticalDragNotifier,
-                    builder: (context, drag, child) {
-                      return AnimatedOpacity(
-                        duration: const Duration(milliseconds: 100),
-                        opacity: drag > 20 ? 0 : 1.0,
-                        child: child,
-                      );
-                    },
-                    child: glassButton(
-                      icon: Icons.arrow_back,
-                      isDark: isDark,
-                      onTap: () => Navigator.pop(context),
+                  Positioned(
+                    top: 50,
+                    left: 20,
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: verticalDragNotifier,
+                      builder: (context, drag, child) {
+                        return AnimatedOpacity(
+                          duration: const Duration(milliseconds: 100),
+                          opacity: drag > 20 ? 0 : 1.0,
+                          child: child,
+                        );
+                      },
+                      child: glassButton(
+                        icon: Icons.arrow_back,
+                        isDark: isDark,
+                        onTap: () => Navigator.pop(context),
+                      ),
                     ),
                   ),
-                ),
 
                 if (showViewerChrome)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 106 + MediaQuery.of(context).padding.bottom,
-                  child: IgnorePointer(
-                    ignoring: showDetails,
-                    child: AnimatedSlide(
-                      duration: const Duration(milliseconds: 320),
-                      curve: Curves.easeOutCubic,
-                      offset: showDetails
-                          ? const Offset(0, 1.2)
-                          : showThumbnailStrip
-                              ? Offset.zero
-                              : const Offset(0, 0.9),
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 220),
-                        opacity: showDetails || !showThumbnailStrip || !showViewerChrome ? 0 : 1,
-                        child: ValueListenableBuilder<int>(
-                          valueListenable: currentIndexNotifier,
-                          builder: (context, _, __) {
-                            return buildThumbnailStrip(isDark);
-                          },
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 106 + MediaQuery.of(context).padding.bottom,
+                    child: IgnorePointer(
+                      ignoring: showDetails,
+                      child: AnimatedSlide(
+                        duration: const Duration(milliseconds: 320),
+                        curve: Curves.easeOutCubic,
+                        offset: showDetails
+                            ? const Offset(0, 1.2)
+                            : showThumbnailStrip
+                            ? Offset.zero
+                            : const Offset(0, 0.9),
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 220),
+                          opacity:
+                              showDetails ||
+                                  !showThumbnailStrip ||
+                                  !showViewerChrome
+                              ? 0
+                              : 1,
+                          child: ValueListenableBuilder<int>(
+                            valueListenable: currentIndexNotifier,
+                            builder: (context, _, __) {
+                              return buildThumbnailStrip(isDark);
+                            },
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
 
                 if (showViewerChrome)
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  bottom: 2 + MediaQuery.of(context).padding.bottom,
-                  child: IgnorePointer(
-                    ignoring: showDetails,
-                    child: AnimatedSlide(
-                      duration: const Duration(milliseconds: 320),
-                      curve: Curves.easeOutCubic,
-                      offset: showDetails ? const Offset(0, 2) : Offset.zero,
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    bottom: 2 + MediaQuery.of(context).padding.bottom,
+                    child: IgnorePointer(
+                      ignoring: showDetails,
+                      child: AnimatedSlide(
+                        duration: const Duration(milliseconds: 320),
+                        curve: Curves.easeOutCubic,
+                        offset: showDetails ? const Offset(0, 2) : Offset.zero,
+                        child: AnimatedOpacity(
+                          duration: const Duration(milliseconds: 220),
+                          opacity: showDetails || !showViewerChrome ? 0 : 1,
+                          child: ValueListenableBuilder<double>(
+                            valueListenable: verticalDragNotifier,
+                            builder: (context, drag, child) {
+                              return AnimatedOpacity(
+                                duration: const Duration(milliseconds: 100),
+                                opacity: drag > 20 ? 0 : 1.0,
+                                child: child,
+                              );
+                            },
+                            child: buildQuickActionBar(isDark),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                if (showViewerChrome)
+                  Positioned(
+                    right: 12,
+                    bottom: 117 + MediaQuery.of(context).padding.bottom,
+                    child: IgnorePointer(
+                      ignoring: showDetails,
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 220),
                         opacity: showDetails || !showViewerChrome ? 0 : 1,
-                        child: ValueListenableBuilder<double>(
-                          valueListenable: verticalDragNotifier,
-                          builder: (context, drag, child) {
-                            return AnimatedOpacity(
-                              duration: const Duration(milliseconds: 100),
-                              opacity: drag > 20 ? 0 : 1.0,
-                              child: child,
-                            );
-                          },
-                          child: buildQuickActionBar(isDark),
-                        ),
+                        child: buildThumbnailStripToggle(isDark),
                       ),
                     ),
                   ),
-                ),
-
-                if (showViewerChrome)
-                Positioned(
-                  right: 12,
-                  bottom: 117 + MediaQuery.of(context).padding.bottom,
-                  child: IgnorePointer(
-                    ignoring: showDetails,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 220),
-                      opacity: showDetails || !showViewerChrome ? 0 : 1,
-                      child: buildThumbnailStripToggle(isDark),
-                    ),
-                  ),
-                ),
 
                 // 📊 DETAILS PANEL
                 Positioned(
@@ -761,17 +775,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-        ),
+        SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
       );
   }
 
-  Future<void> _shareCurrentFile({
-    String? text,
-    String? subject,
-  }) async {
+  Future<void> _shareCurrentFile({String? text, String? subject}) async {
     final file = await _currentAsset.file;
     if (file == null) {
       _showViewerSnackBar('File not available');
@@ -779,11 +787,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     }
 
     await SharePlus.instance.share(
-      ShareParams(
-        files: [XFile(file.path)],
-        text: text,
-        subject: subject,
-      ),
+      ShareParams(files: [XFile(file.path)], text: text, subject: subject),
     );
   }
 
@@ -798,26 +802,30 @@ class _ViewerScreenState extends State<ViewerScreen> {
     final asset = widget.images[currentIndexNotifier.value];
     final file = await asset.file;
     if (file == null || !mounted) return;
-    
+
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ProImageEditor.file(
-           file,
-           callbacks: ProImageEditorCallbacks(
-              onImageEditingComplete: (Uint8List bytes) async {
-                 Navigator.pop(context);
-              }
-           )
+          file,
+          callbacks: ProImageEditorCallbacks(
+            onImageEditingComplete: (Uint8List bytes) async {
+              Navigator.pop(context);
+            },
+          ),
         ),
-      )
+      ),
     );
   }
 
   Future<void> hideAsset() async {
-     ScaffoldMessenger.of(context).showSnackBar(
-       const SnackBar(content: Text('Moved to Private Vault'), behavior: SnackBarBehavior.floating),
-     );
+    try {
+      await vaultService.moveAssetToVault(_currentAsset);
+      if (!mounted) return;
+      Navigator.pop(context, 'vault');
+    } catch (_) {
+      _showViewerSnackBar('Move to Safe Folder failed');
+    }
   }
 
   Future<void> openWithAnotherApp() async {
@@ -829,7 +837,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   Future<void> _showRenameDialog() async {
     final file = await _currentAsset.file;
-    final currentName = file == null ? 'Unknown file' : path.basename(file.path);
+    final currentName = file == null
+        ? 'Unknown file'
+        : path.basename(file.path);
     final controller = TextEditingController(text: currentName);
 
     if (!mounted) return;
@@ -902,84 +912,83 @@ class _ViewerScreenState extends State<ViewerScreen> {
       builder: (sheetContext) {
         return _buildAnimatedSheet(
           child: GlassContainer(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
-          blurSigma: 20,
-          child: SafeArea(
-            top: false,
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                  Center(
-                    child: Container(
-                      width: 44,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: 0.24),
-                        borderRadius: BorderRadius.circular(99),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+            blurSigma: 20,
+            child: SafeArea(
+              top: false,
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 44,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.24),
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 18),
+                      Text(
+                        'Set As',
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Choose where you want to use this image next.',
+                        style: TextStyle(color: color.withValues(alpha: 0.68)),
+                      ),
+                      const SizedBox(height: 14),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.wallpaper_rounded,
+                        title: 'Home Screen',
+                        subtitle: 'Prepare this photo for wallpaper use',
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          _showViewerSnackBar(
+                            'Set as wallpaper needs native Android integration next',
+                          );
+                        },
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.lock_rounded,
+                        title: 'Lock Screen',
+                        subtitle: 'Use this image on the lock screen',
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          _showViewerSnackBar(
+                            'Lock-screen set as needs native Android integration next',
+                          );
+                        },
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.person_rounded,
+                        title: 'Profile Photo',
+                        subtitle: 'Open this image in another app to continue',
+                        onTap: () async {
+                          Navigator.pop(sheetContext);
+                          await openWithAnotherApp();
+                        },
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 18),
-                  Text(
-                    'Set As',
-                    style: TextStyle(
-                      color: color,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Choose where you want to use this image next.',
-                    style: TextStyle(
-                      color: color.withValues(alpha: 0.68),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.wallpaper_rounded,
-                    title: 'Home Screen',
-                    subtitle: 'Prepare this photo for wallpaper use',
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _showViewerSnackBar(
-                        'Set as wallpaper needs native Android integration next',
-                      );
-                    },
-                  ),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.lock_rounded,
-                    title: 'Lock Screen',
-                    subtitle: 'Use this image on the lock screen',
-                    onTap: () {
-                      Navigator.pop(sheetContext);
-                      _showViewerSnackBar(
-                        'Lock-screen set as needs native Android integration next',
-                      );
-                    },
-                  ),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.person_rounded,
-                    title: 'Profile Photo',
-                    subtitle: 'Open this image in another app to continue',
-                    onTap: () async {
-                      Navigator.pop(sheetContext);
-                      await openWithAnotherApp();
-                    },
-                  ),
-                  ],
                 ),
               ),
             ),
           ),
-        ));
+        );
       },
     );
   }
@@ -1084,7 +1093,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       final asset = widget.images[currentIndexNotifier.value];
       await recycleBinDatabase.addAsset(asset);
       if (!mounted) return;
-      Navigator.pop(context, true);
+      Navigator.pop(context, 'recycle');
     } finally {
       if (mounted) {
         setState(() {
@@ -1104,126 +1113,136 @@ class _ViewerScreenState extends State<ViewerScreen> {
         final textColor = isDark ? Colors.white : const Color(0xFF211A33);
         return _buildAnimatedSheet(
           child: GlassContainer(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
-          blurSigma: 22,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
-            child: SafeArea(
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                  Container(
-                    width: 44,
-                    height: 5,
-                    margin: const EdgeInsets.only(bottom: 20),
-                    decoration: BoxDecoration(
-                      color: textColor.withValues(alpha: 0.22),
-                      borderRadius: BorderRadius.circular(99),
-                    ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+            blurSigma: 22,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
+              child: SafeArea(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 5,
+                        margin: const EdgeInsets.only(bottom: 20),
+                        decoration: BoxDecoration(
+                          color: textColor.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                      ),
+                      Text(
+                        'Photo Actions',
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Quick tools and premium actions for this image.',
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.68),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      _buildMenuSectionLabel(
+                        title: 'Editing',
+                        color: textColor,
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.edit_rounded,
+                        title: 'Edit',
+                        subtitle: 'Open the built-in editor',
+                        onTap: () {
+                          Navigator.pop(context);
+                          editAsset();
+                        },
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.drive_file_rename_outline_rounded,
+                        title: 'Rename',
+                        subtitle: 'Prepare a better file name',
+                        onTap: () async {
+                          Navigator.pop(context);
+                          await _showRenameDialog();
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _buildMenuSectionLabel(
+                        title: 'Sharing',
+                        color: textColor,
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.open_in_new_rounded,
+                        title: 'Open With App',
+                        subtitle: 'Send this image into another app',
+                        onTap: () async {
+                          Navigator.pop(context);
+                          await openWithAnotherApp();
+                        },
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.wallpaper_rounded,
+                        title: 'Set As',
+                        subtitle: 'Wallpaper, lock screen, or profile photo',
+                        onTap: () async {
+                          Navigator.pop(context);
+                          await _showSetAsSheet(isDark);
+                        },
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.share_rounded,
+                        title: 'Share',
+                        subtitle: 'Share this image anywhere',
+                        onTap: () {
+                          Navigator.pop(context);
+                          shareAsset();
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _buildMenuSectionLabel(
+                        title: 'Privacy',
+                        color: textColor,
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.visibility_off_rounded,
+                        title: 'Move to Vault',
+                        subtitle: 'Hide this image from the gallery',
+                        onTap: () {
+                          Navigator.pop(context);
+                          hideAsset();
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      _buildMenuSectionLabel(title: 'Delete', color: textColor),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.delete_rounded,
+                        title: 'Move to Recycle Bin',
+                        subtitle: 'Remove it now, restore it later',
+                        destructive: true,
+                        onTap: () {
+                          Navigator.pop(context);
+                          deleteAsset();
+                        },
+                      ),
+                    ],
                   ),
-                  Text(
-                    'Photo Actions',
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Quick tools and premium actions for this image.',
-                    style: TextStyle(
-                      color: textColor.withValues(alpha: 0.68),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  _buildMenuSectionLabel(title: 'Editing', color: textColor),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.edit_rounded,
-                    title: 'Edit',
-                    subtitle: 'Open the built-in editor',
-                    onTap: () {
-                      Navigator.pop(context);
-                      editAsset();
-                    },
-                  ),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.drive_file_rename_outline_rounded,
-                    title: 'Rename',
-                    subtitle: 'Prepare a better file name',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await _showRenameDialog();
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  _buildMenuSectionLabel(title: 'Sharing', color: textColor),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.open_in_new_rounded,
-                    title: 'Open With App',
-                    subtitle: 'Send this image into another app',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await openWithAnotherApp();
-                    },
-                  ),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.wallpaper_rounded,
-                    title: 'Set As',
-                    subtitle: 'Wallpaper, lock screen, or profile photo',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await _showSetAsSheet(isDark);
-                    },
-                  ),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.share_rounded,
-                    title: 'Share',
-                    subtitle: 'Share this image anywhere',
-                    onTap: () {
-                      Navigator.pop(context);
-                      shareAsset();
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  _buildMenuSectionLabel(title: 'Privacy', color: textColor),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.visibility_off_rounded,
-                    title: 'Move to Vault',
-                    subtitle: 'Hide this image from the gallery',
-                    onTap: () {
-                      Navigator.pop(context);
-                      hideAsset();
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  _buildMenuSectionLabel(title: 'Delete', color: textColor),
-                  _buildMenuTile(
-                    isDark: isDark,
-                    icon: Icons.delete_rounded,
-                    title: 'Move to Recycle Bin',
-                    subtitle: 'Remove it now, restore it later',
-                    destructive: true,
-                    onTap: () {
-                      Navigator.pop(context);
-                      deleteAsset();
-                    },
-                  ),
-                  ],
                 ),
               ),
             ),
           ),
-        ));
-      }
+        );
+      },
     );
   }
 
@@ -1277,56 +1296,54 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 ],
               ),
               child: Row(
-              children: [
-                Container(
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    color: iconBg,
-                    borderRadius: BorderRadius.circular(16),
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: iconBg,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(icon, color: textColor),
                   ),
-                  child: Icon(icon, color: textColor),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          color: textColor,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: TextStyle(
+                            color: textColor,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          color: textColor.withValues(alpha: 0.7),
-                          height: 1.3,
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            color: textColor.withValues(alpha: 0.7),
+                            height: 1.3,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: textColor.withValues(alpha: 0.72),
-                ),
-              ],
-            )),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: textColor.withValues(alpha: 0.72),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildMenuSectionLabel({
-    required String title,
-    required Color color,
-  }) {
+  Widget _buildMenuSectionLabel({required String title, required Color color}) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 2, 4, 10),
       child: Text(
@@ -1349,10 +1366,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       builder: (context, value, sheetChild) {
         return Transform.translate(
           offset: Offset(0, (1 - value) * 26),
-          child: Opacity(
-            opacity: value,
-            child: sheetChild,
-          ),
+          child: Opacity(opacity: value, child: sheetChild),
         );
       },
       child: child,
@@ -1401,9 +1415,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   // 📊 DETAILS PANEL
   Widget buildDetailsPanel(AssetEntity asset, bool isDark) {
-    final accent = isDark
-        ? const Color(0xFFB8AEFF)
-        : const Color(0xFF7A6CE0);
+    final accent = isDark ? const Color(0xFFB8AEFF) : const Color(0xFF7A6CE0);
     final panelColor = isDark
         ? Colors.white.withOpacity(0.09)
         : Colors.white.withOpacity(0.72);
@@ -1413,9 +1425,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     return AnimatedSlide(
       duration: const Duration(milliseconds: 380),
       curve: Curves.easeOutCubic,
-      offset: showDetails
-          ? const Offset(0, 0)
-          : const Offset(0, 1.08),
+      offset: showDetails ? const Offset(0, 0) : const Offset(0, 1.08),
       child: Transform.translate(
         offset: Offset(0, detailsDrag),
         child: GestureDetector(
@@ -1435,8 +1445,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
             }
           },
           child: ClipRRect(
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(34)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
               child: Container(
@@ -1474,9 +1483,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                           height: 5,
                           margin: const EdgeInsets.only(bottom: 14),
                           decoration: BoxDecoration(
-                            color: isDark
-                                ? Colors.white38
-                                : Colors.black26,
+                            color: isDark ? Colors.white38 : Colors.black26,
                             borderRadius: BorderRadius.circular(999),
                           ),
                         ),
@@ -1488,7 +1495,6 @@ class _ViewerScreenState extends State<ViewerScreen> {
                               horizontal: 0,
                               vertical: 8,
                             ),
-                           
                           ),
                           const SizedBox(width: 12),
                           Expanded(

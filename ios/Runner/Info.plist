@@ -9,6 +9,9 @@
 <key>NSPhotoLibraryAddUsageDescription</key>
 <string>This app needs permission to save photos.</string>
 
+<key>NSFaceIDUsageDescription</key>
+<string>Use Face ID to unlock your Safe Folder.</string>
+
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

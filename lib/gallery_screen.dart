@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:path/path.dart' as path;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'album_detail_screen.dart';
 import 'gallery/gallery_album_widgets.dart' as gallery_album_widgets;
 import 'gallery/gallery_grid_widgets.dart' as gallery_grid_widgets;
@@ -16,6 +18,8 @@ import 'services/gallery_service.dart';
 import 'services/recycle_bin_database.dart';
 import 'viewer_screen.dart';
 import 'video_viewer_screen.dart';
+import 'vault_lock_screen.dart';
+import 'services/vault_service.dart';
 import 'theme_provider.dart';
 
 class GalleryScreen extends StatefulWidget {
@@ -97,8 +101,11 @@ class _GalleryScreenState extends State<GalleryScreen>
   List<AssetEntity>? _prefetchedImages;
   int? _prefetchedPage;
   Timer? _thumbnailWarmupTimer;
+  Timer? _vaultHoldTimer;
   int _lastWarmedStart = -1;
   int _lastWarmedEnd = -1;
+  bool _isVaultEntryPressing = false;
+  bool _isOpeningVault = false;
 
   bool get _isPinching => _activePointers >= 2;
   bool get isSelectionMode => selectedAssetIds.isNotEmpty;
@@ -142,7 +149,9 @@ class _GalleryScreenState extends State<GalleryScreen>
     WidgetsBinding.instance.removeObserver(this);
     _thumbnailWarmupTimer?.cancel();
     _dragAutoScrollTimer?.cancel();
+    _vaultHoldTimer?.cancel();
     thumbnailProviderCache.clear();
+    _gridTileKeys.clear();
     scrollController.dispose();
     videosScrollController.dispose();
     favoritesScrollController.dispose();
@@ -153,15 +162,80 @@ class _GalleryScreenState extends State<GalleryScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) return;
+    if (state != AppLifecycleState.resumed) {
+      unawaited(VaultService.instance.lock());
+      return;
+    }
     service.clearCache();
+    _gridTileKeys.clear();
     clearSelection();
     loadFavorites();
     unawaited(loadRecycleBin());
     unawaited(loadInitialMediaData());
   }
 
+  void _startVaultEntryPress() {
+    if (selectedIndex != 0 || isSelectionMode || _isOpeningVault) return;
+    _vaultHoldTimer?.cancel();
+    setState(() {
+      _isVaultEntryPressing = true;
+    });
+    _vaultHoldTimer = Timer(const Duration(seconds: 2), () async {
+      if (!mounted) return;
+      HapticFeedback.lightImpact();
+      await _openVault();
+    });
+  }
+
+  void _cancelVaultEntryPress() {
+    _vaultHoldTimer?.cancel();
+    if (!_isVaultEntryPressing) return;
+    setState(() {
+      _isVaultEntryPressing = false;
+    });
+  }
+
+  Future<void> _openVault() async {
+    if (_isOpeningVault) return;
+    _vaultHoldTimer?.cancel();
+    setState(() {
+      _isOpeningVault = true;
+      _isVaultEntryPressing = false;
+    });
+
+    final changed = await Navigator.push<bool>(
+      context,
+      PageRouteBuilder<bool>(
+        transitionDuration: const Duration(milliseconds: 260),
+        reverseTransitionDuration: const Duration(milliseconds: 220),
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.985, end: 1).animate(
+                CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+              ),
+              child: const VaultLockScreen(),
+            ),
+          );
+        },
+      ),
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _isOpeningVault = false;
+    });
+
+    if (changed == true) {
+      service.clearCache();
+      await loadInitialMediaData();
+      await syncFavoriteImages(showLoading: false);
+    }
+  }
+
   Future<void> loadInitialMediaData() async {
+    _gridTileKeys.clear();
     final permission = await service.requestImagePermission();
     if (!mounted) return;
 
@@ -275,6 +349,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     if (selectedAssetIds.isEmpty) return;
     setState(() {
       selectedAssetIds.clear();
+      _gridTileKeys.clear();
     });
   }
 
@@ -379,13 +454,13 @@ class _GalleryScreenState extends State<GalleryScreen>
     double velocity = 0;
 
     if (globalPosition.dy < rect.top + edgeThreshold) {
-      velocity = -(((rect.top + edgeThreshold) - globalPosition.dy) /
-                  edgeThreshold)
+      velocity =
+          -(((rect.top + edgeThreshold) - globalPosition.dy) / edgeThreshold)
               .clamp(0.2, 1.0) *
           18;
     } else if (globalPosition.dy > rect.bottom - edgeThreshold) {
-      velocity = (((globalPosition.dy - (rect.bottom - edgeThreshold)) /
-                  edgeThreshold)
+      velocity =
+          (((globalPosition.dy - (rect.bottom - edgeThreshold)) / edgeThreshold)
               .clamp(0.2, 1.0)) *
           18;
     }
@@ -398,7 +473,9 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
 
     _dragAutoScrollVelocity = velocity;
-    _dragAutoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+    _dragAutoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (
+      _,
+    ) {
       final activeController = _activeDragSelectionScrollController;
       final dragPosition = _lastDragGlobalPosition;
       if (_dragSelectionTargetValue == null ||
@@ -459,10 +536,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-        ),
+        SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
       );
   }
 
@@ -684,6 +758,238 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
   }
 
+  Future<void> moveSelectionToVault() async {
+    final ids = selectedAssetIds.toList(growable: false);
+    final assets = _selectedAssetsFromVisibleItems();
+    if (ids.isEmpty || isRecycleActionInProgress) return;
+
+    setState(() {
+      isRecycleActionInProgress = true;
+    });
+    try {
+      final vaultService = VaultService.instance;
+      for (final asset in assets) {
+        await vaultService.moveAssetToVault(asset);
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        favorites.removeAll(ids);
+        favoriteImages = favoriteImages
+            .where((asset) => !ids.contains(asset.id))
+            .toList();
+        selectedAssetIds.clear();
+      });
+
+      await _refreshMediaAfterRecycleChange();
+      if (!mounted) return;
+      _showRecycleSnackBar(
+        '${ids.length} item${ids.length == 1 ? '' : 's'} moved to Safe Folder',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          isRecycleActionInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<void> shareSelection() async {
+    final assets = _selectedAssetsFromVisibleItems();
+    if (assets.isEmpty) return;
+
+    final files = <XFile>[];
+    for (final asset in assets) {
+      final file = await asset.file;
+      if (file != null) {
+        files.add(XFile(file.path));
+      }
+    }
+
+    if (files.isEmpty) return;
+
+    await SharePlus.instance.share(
+      ShareParams(files: files),
+    );
+  }
+
+  Future<void> _showSelectionMenu() async {
+    List<AssetEntity> getVisibleImages() {
+      if (selectedIndex == 1) {
+        return videos;
+      } else if (selectedIndex == 3) {
+        return favoriteImages;
+      }
+      return images;
+    }
+
+    final visibleImages = getVisibleImages();
+    final colorScheme = Theme.of(context).colorScheme;
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.black26,
+      builder: (dialogContext) {
+        return Stack(
+          children: [
+            // Dismiss background
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => Navigator.pop(dialogContext),
+                child: Container(color: Colors.transparent),
+              ),
+            ),
+            // Menu positioned at top-right
+            Positioned(
+              top: 56,
+              right: 16,
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(20),
+                blurSigma: 18,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 240),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Header
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+                          child: SelectionContainer.disabled(
+                            child: Text(
+                              '${selectedAssetIds.length} selected',
+                              style: TextStyle(
+                                color: colorScheme.onSurface,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Divider(
+                            color: colorScheme.outlineVariant.withValues(alpha: 0.3),
+                            height: 1,
+                          ),
+                        ),
+                        // Menu items
+                        _buildMenuTile(
+                          Icons.share_rounded,
+                          'Share',
+                          colorScheme,
+                          () async {
+                            Navigator.pop(dialogContext);
+                            await shareSelection();
+                          },
+                        ),
+                        _buildMenuTile(
+                          Icons.lock_rounded,
+                          'Move to Safe Folder',
+                          colorScheme,
+                          () async {
+                            Navigator.pop(dialogContext);
+                            await moveSelectionToVault();
+                          },
+                        ),
+                        _buildMenuTile(
+                          Icons.delete_rounded,
+                          'Move to Recycle Bin',
+                          colorScheme,
+                          () async {
+                            Navigator.pop(dialogContext);
+                            await moveSelectionToRecycleBin();
+                          },
+                          isDestructive: true,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          child: Divider(
+                            color: colorScheme.outlineVariant.withValues(alpha: 0.3),
+                            height: 1,
+                          ),
+                        ),
+                        _buildMenuTile(
+                          Icons.select_all_rounded,
+                          'Select All',
+                          colorScheme,
+                          () {
+                            Navigator.pop(dialogContext);
+                            _toggleSelectAllForCurrentTab(visibleImages);
+                          },
+                        ),
+                        _buildMenuTile(
+                          Icons.deselect_rounded,
+                          'Deselect All',
+                          colorScheme,
+                          () {
+                            Navigator.pop(dialogContext);
+                            clearSelection();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildMenuTile(
+    IconData icon,
+    String label,
+    ColorScheme colorScheme,
+    VoidCallback onTap, {
+    bool isDestructive = false,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      splashColor: (isDestructive ? colorScheme.error : colorScheme.primary)
+          .withValues(alpha: 0.12),
+      highlightColor: (isDestructive ? colorScheme.error : colorScheme.primary)
+          .withValues(alpha: 0.06),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 20,
+              color: isDestructive ? colorScheme.error : colorScheme.primary,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: SelectionContainer.disabled(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: isDestructive
+                        ? colorScheme.error
+                        : colorScheme.onSurface,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 0.2,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _restoreRecycleBinItem(AssetEntity asset) async {
     if (isRecycleActionInProgress) return;
     setState(() {
@@ -791,219 +1097,211 @@ class _GalleryScreenState extends State<GalleryScreen>
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 120),
           sliver: SliverFixedExtentList(
             itemExtent: 116,
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final asset = recycleBinItems[index];
-                final record = recycleBinRecords[asset.id];
-                final filePath = record?.filePath ?? '';
-                final title = filePath.isEmpty
-                    ? 'Unknown file'
-                    : path.basename(filePath);
-                final subtitle = record == null
-                    ? 'Recently deleted'
-                    : _formatRecycleDate(record.deletedAt);
-                final isSelected = selectedAssetIds.contains(asset.id);
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final asset = recycleBinItems[index];
+              final record = recycleBinRecords[asset.id];
+              final filePath = record?.filePath ?? '';
+              final title = filePath.isEmpty
+                  ? 'Unknown file'
+                  : path.basename(filePath);
+              final subtitle = record == null
+                  ? 'Recently deleted'
+                  : _formatRecycleDate(record.deletedAt);
+              final isSelected = selectedAssetIds.contains(asset.id);
 
-                return RepaintBoundary(
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Dismissible(
-                      key: ValueKey('recycle-${asset.id}'),
-                      direction: isRecycleActionInProgress || isSelectionMode
-                          ? DismissDirection.none
-                          : DismissDirection.horizontal,
-                      background: _buildRecycleSwipeBackground(
-                        restore: false,
-                        alignStart: true,
-                      ),
-                      secondaryBackground: _buildRecycleSwipeBackground(
-                        restore: true,
-                        alignStart: false,
-                      ),
-                      confirmDismiss: (direction) async {
-                        if (direction == DismissDirection.endToStart) {
-                          await _restoreRecycleBinItem(asset);
-                        } else {
-                          await _deleteRecycleBinItemForever(asset);
-                        }
-                        return true;
-                      },
-                      child: Material(
-                        color: Colors.transparent,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onLongPress: () {
+              return RepaintBoundary(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Dismissible(
+                    key: ValueKey('recycle-${asset.id}'),
+                    direction: isRecycleActionInProgress || isSelectionMode
+                        ? DismissDirection.none
+                        : DismissDirection.horizontal,
+                    background: _buildRecycleSwipeBackground(
+                      restore: false,
+                      alignStart: true,
+                    ),
+                    secondaryBackground: _buildRecycleSwipeBackground(
+                      restore: true,
+                      alignStart: false,
+                    ),
+                    confirmDismiss: (direction) async {
+                      if (direction == DismissDirection.endToStart) {
+                        await _restoreRecycleBinItem(asset);
+                      } else {
+                        await _deleteRecycleBinItemForever(asset);
+                      }
+                      return true;
+                    },
+                    child: Material(
+                      color: Colors.transparent,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onLongPress: () {
+                          toggleSelection(asset);
+                        },
+                        onTap: () async {
+                          if (isSelectionMode) {
                             toggleSelection(asset);
-                          },
-                          onTap: () async {
-                            if (isSelectionMode) {
-                              toggleSelection(asset);
-                              return;
-                            }
-                            await _showRecycleBinItemSheet(asset);
-                          },
-                          child: GlassContainer(
-                            borderRadius: BorderRadius.circular(26),
-                            enableBlur: false,
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 160),
-                                    curve: Curves.easeOutCubic,
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(26),
-                                      border: Border.all(
-                                        color: isSelected
-                                            ? colorScheme.primary.withValues(
-                                                alpha: 0.42,
-                                              )
-                                            : Colors.transparent,
-                                        width: 1.2,
-                                      ),
+                            return;
+                          }
+                          await _showRecycleBinItemSheet(asset);
+                        },
+                        child: GlassContainer(
+                          borderRadius: BorderRadius.circular(26),
+                          enableBlur: false,
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 160),
+                                  curve: Curves.easeOutCubic,
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(26),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? colorScheme.primary.withValues(
+                                              alpha: 0.42,
+                                            )
+                                          : Colors.transparent,
+                                      width: 1.2,
                                     ),
-                                    child: Row(
-                                      children: [
-                                        ClipRRect(
-                                          borderRadius:
-                                              BorderRadius.circular(20),
-                                          child: SizedBox(
-                                            width: 74,
-                                            height: 74,
-                                            child: Stack(
-                                              fit: StackFit.expand,
-                                              children: [
-                                                buildImage(asset, thumbPx: 128),
-                                                if (asset.type == AssetType.video)
-                                                  Align(
-                                                    alignment:
-                                                        Alignment.bottomRight,
-                                                    child: Padding(
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(20),
+                                        child: SizedBox(
+                                          width: 74,
+                                          height: 74,
+                                          child: Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              buildImage(asset, thumbPx: 128),
+                                              if (asset.type == AssetType.video)
+                                                Align(
+                                                  alignment:
+                                                      Alignment.bottomRight,
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.all(6),
+                                                    child: Container(
                                                       padding:
-                                                          const EdgeInsets.all(
-                                                            6,
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 5,
+                                                            vertical: 2,
                                                           ),
-                                                      child: Container(
-                                                        padding:
-                                                            const EdgeInsets.symmetric(
-                                                              horizontal: 5,
-                                                              vertical: 2,
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.black
+                                                            .withValues(
+                                                              alpha: 0.56,
                                                             ),
-                                                        decoration: BoxDecoration(
-                                                          color: Colors.black
-                                                              .withValues(
-                                                                alpha: 0.56,
-                                                              ),
-                                                          borderRadius:
-                                                              BorderRadius.circular(
-                                                                8,
-                                                              ),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              8,
+                                                            ),
+                                                      ),
+                                                      child: Text(
+                                                        _formatDuration(
+                                                          asset.videoDuration,
                                                         ),
-                                                        child: Text(
-                                                          _formatDuration(
-                                                            asset.videoDuration,
-                                                          ),
-                                                          style:
-                                                              const TextStyle(
-                                                                color: Colors.white,
-                                                                fontSize: 10,
-                                                                fontWeight:
-                                                                    FontWeight.w700,
-                                                              ),
+                                                        style: const TextStyle(
+                                                          color: Colors.white,
+                                                          fontSize: 10,
+                                                          fontWeight:
+                                                              FontWeight.w700,
                                                         ),
                                                       ),
                                                     ),
                                                   ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 14),
-                                        Expanded(
-                                          child: Column(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                title,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: TextStyle(
-                                                  color: colorScheme.onSurface,
-                                                  fontSize: 17,
-                                                  fontWeight: FontWeight.w800,
                                                 ),
-                                              ),
-                                              const SizedBox(height: 6),
-                                              Text(
-                                                subtitle,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: TextStyle(
-                                                  color: colorScheme.onSurface
-                                                      .withValues(alpha: 0.68),
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                asset.type == AssetType.video
-                                                    ? 'Video • Swipe left to restore'
-                                                    : 'Photo • Swipe left to restore',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: TextStyle(
-                                                  color: colorScheme.onSurface
-                                                      .withValues(alpha: 0.56),
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
                                             ],
                                           ),
                                         ),
-                                        const SizedBox(width: 10),
-                                        Container(
-                                          width: 42,
-                                          height: 42,
-                                          decoration: BoxDecoration(
-                                            color: isSelected
-                                                ? colorScheme.primaryContainer
+                                      ),
+                                      const SizedBox(width: 14),
+                                      Expanded(
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              title,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: colorScheme.onSurface,
+                                                fontSize: 17,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Text(
+                                              subtitle,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: colorScheme.onSurface
+                                                    .withValues(alpha: 0.68),
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              asset.type == AssetType.video
+                                                  ? 'Video • Swipe left to restore'
+                                                  : 'Photo • Swipe left to restore',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: colorScheme.onSurface
+                                                    .withValues(alpha: 0.56),
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Container(
+                                        width: 42,
+                                        height: 42,
+                                        decoration: BoxDecoration(
+                                          color: isSelected
+                                              ? colorScheme.primaryContainer
                                                     .withValues(alpha: 0.98)
-                                                : colorScheme.primaryContainer
+                                              : colorScheme.primaryContainer
                                                     .withValues(alpha: 0.92),
-                                            borderRadius:
-                                                BorderRadius.circular(14),
-                                          ),
-                                          child: Icon(
-                                            isSelected
-                                                ? Icons.check_rounded
-                                                : Icons.chevron_right_rounded,
-                                            color: isSelected
-                                                ? colorScheme
-                                                    .onPrimaryContainer
-                                                : colorScheme
-                                                    .onPrimaryContainer,
+                                          borderRadius: BorderRadius.circular(
+                                            14,
                                           ),
                                         ),
-                                      ],
-                                    ),
+                                        child: Icon(
+                                          isSelected
+                                              ? Icons.check_rounded
+                                              : Icons.chevron_right_rounded,
+                                          color: isSelected
+                                              ? colorScheme.onPrimaryContainer
+                                              : colorScheme.onPrimaryContainer,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ),
                   ),
-                );
-              },
-              childCount: recycleBinItems.length,
-            ),
+                ),
+              );
+            }, childCount: recycleBinItems.length),
           ),
         ),
       ],
@@ -1249,10 +1547,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     late final bool resolvedHasMore;
 
     if (loadMore) {
-      final rawData = await service.fetchImages(
-        page: nextPage,
-        size: pageSize,
-      );
+      final rawData = await service.fetchImages(page: nextPage, size: pageSize);
       data = filterRecycleBinItems(rawData);
       resolvedPage = nextPage;
       resolvedHasMore = rawData.length == pageSize;
@@ -1263,10 +1558,7 @@ class _GalleryScreenState extends State<GalleryScreen>
       var lastBatchCount = 0;
 
       for (var page = 0; page <= lastTargetPage; page++) {
-        final rawPage = await service.fetchImages(
-          page: page,
-          size: pageSize,
-        );
+        final rawPage = await service.fetchImages(page: page, size: pageSize);
         lastLoadedPage = page;
         lastBatchCount = rawPage.length;
         collected.addAll(filterRecycleBinItems(rawPage));
@@ -1310,7 +1602,12 @@ class _GalleryScreenState extends State<GalleryScreen>
     int? targetPage,
   }) async {
     if (loadMore) {
-      if (isLoadingMoreVideos || isLoadingVideos || !hasMoreVideos || selectedIndex != 1) return;
+      if (isLoadingMoreVideos ||
+          isLoadingVideos ||
+          !hasMoreVideos ||
+          selectedIndex != 1) {
+        return;
+      }
       setState(() => isLoadingMoreVideos = true);
     } else {
       if (showLoading || videos.isEmpty) {
@@ -1319,7 +1616,8 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
 
     if (!loadMore) {
-      final permission = permissionOverride ?? await service.requestImagePermission();
+      final permission =
+          permissionOverride ?? await service.requestImagePermission();
       if (!mounted) return;
       if (!permission.hasAccess) {
         setState(() {
@@ -1410,9 +1708,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
   }
 
-  Future<void> loadAlbums({
-    PermissionState? permissionOverride,
-  }) async {
+  Future<void> loadAlbums({PermissionState? permissionOverride}) async {
     final permission =
         permissionOverride ?? await service.requestImagePermission();
     if (!mounted) return;
@@ -1441,22 +1737,25 @@ class _GalleryScreenState extends State<GalleryScreen>
     if (selectedIndex == 0) {
       if (!scrollController.hasClients || isLoading || isLoadingMore) return;
       final position = scrollController.position;
-      if (position.pixels > position.maxScrollExtent - _galleryLoadMoreThreshold) {
+      if (position.pixels >
+          position.maxScrollExtent - _galleryLoadMoreThreshold) {
         loadImages(loadMore: true);
       }
     } else if (selectedIndex == 1) {
-      if (!videosScrollController.hasClients || isLoadingVideos || isLoadingMoreVideos) return;
+      if (!videosScrollController.hasClients ||
+          isLoadingVideos ||
+          isLoadingMoreVideos) {
+        return;
+      }
       final position = videosScrollController.position;
-      if (position.pixels > position.maxScrollExtent - _galleryLoadMoreThreshold) {
+      if (position.pixels >
+          position.maxScrollExtent - _galleryLoadMoreThreshold) {
         loadVideos(loadMore: true);
       }
     }
   }
 
-  ImageProvider<Object> _thumbnailProviderFor(
-    AssetEntity asset,
-    int thumbPx,
-  ) {
+  ImageProvider<Object> _thumbnailProviderFor(AssetEntity asset, int thumbPx) {
     final id = '${asset.id}@$thumbPx';
     return thumbnailProviderCache.putIfAbsent(
       id,
@@ -1468,7 +1767,6 @@ class _GalleryScreenState extends State<GalleryScreen>
       ),
     );
   }
-
 
   void _scheduleThumbnailWarmup() {
     if (!mounted ||
@@ -1495,17 +1793,21 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
 
     final viewportWidth = MediaQuery.of(context).size.width;
-    final contentWidth =
-        (viewportWidth - 20 - ((galleryGridCount - 1) * 6)).clamp(120.0, 4000.0);
+    final contentWidth = (viewportWidth - 20 - ((galleryGridCount - 1) * 6))
+        .clamp(120.0, 4000.0);
     final tileExtent = (contentWidth / galleryGridCount) + 6;
-    final effectiveOffset =
-        (scrollController.offset - 54).clamp(0.0, double.infinity);
+    final effectiveOffset = (scrollController.offset - 54).clamp(
+      0.0,
+      double.infinity,
+    );
     final firstVisibleRow = (effectiveOffset / tileExtent).floor();
     final visibleRows =
         ((scrollController.position.viewportDimension / tileExtent).ceil() + 2)
             .clamp(4, 14);
-    final startIndex = ((firstVisibleRow - 4) * galleryGridCount)
-        .clamp(0, images.length);
+    final startIndex = ((firstVisibleRow - 4) * galleryGridCount).clamp(
+      0,
+      images.length,
+    );
     final endIndex = ((firstVisibleRow + visibleRows + 7) * galleryGridCount)
         .clamp(0, images.length);
 
@@ -1516,17 +1818,11 @@ class _GalleryScreenState extends State<GalleryScreen>
     for (var i = startIndex; i < endIndex; i++) {
       seenThumbnailAssetIds.add(images[i].id);
       warmedThumbnailKeys.add('${images[i].id}@$galleryThumbPx');
-      precacheImage(
-        _thumbnailProviderFor(images[i], galleryThumbPx),
-        context,
-      );
+      precacheImage(_thumbnailProviderFor(images[i], galleryThumbPx), context);
     }
   }
 
-  Widget buildImage(
-    AssetEntity asset, {
-    int thumbPx = 220,
-  }) {
+  Widget buildImage(AssetEntity asset, {int thumbPx = 220}) {
     final id = '${asset.id}@$thumbPx';
     final placeholder = DecoratedBox(
       decoration: BoxDecoration(
@@ -1542,7 +1838,8 @@ class _GalleryScreenState extends State<GalleryScreen>
     );
 
     final isWarm =
-        warmedThumbnailKeys.contains(id) || seenThumbnailAssetIds.contains(asset.id);
+        warmedThumbnailKeys.contains(id) ||
+        seenThumbnailAssetIds.contains(asset.id);
 
     if (!isWarm && Scrollable.recommendDeferredLoadingForContext(context)) {
       return placeholder;
@@ -1567,7 +1864,6 @@ class _GalleryScreenState extends State<GalleryScreen>
     );
   }
 
-
   Widget buildBottomBar(BuildContext context, bool isDark) {
     return GlassContainer(
       borderRadius: BorderRadius.circular(28),
@@ -1580,6 +1876,7 @@ class _GalleryScreenState extends State<GalleryScreen>
           setState(() {
             selectedIndex = index;
             selectedAssetIds.clear();
+            _gridTileKeys.clear();
           });
         },
         destinations: [
@@ -1666,10 +1963,12 @@ class _GalleryScreenState extends State<GalleryScreen>
       );
     }
 
-    final featuredAlbums =
-        albums.where((album) => album.isFeatured).toList(growable: false);
-    final otherAlbums =
-        albums.where((album) => !album.isFeatured).toList(growable: false);
+    final featuredAlbums = albums
+        .where((album) => album.isFeatured)
+        .toList(growable: false);
+    final otherAlbums = albums
+        .where((album) => !album.isFeatured)
+        .toList(growable: false);
 
     return CustomScrollView(
       controller: albumsScrollController,
@@ -1726,7 +2025,9 @@ class _GalleryScreenState extends State<GalleryScreen>
                           icon: Icons.photo_library_rounded,
                           label:
                               '${albums.fold<int>(0, (sum, album) => sum + album.count)} photos',
-                          color: colorScheme.secondaryContainer.withOpacity(0.9),
+                          color: colorScheme.secondaryContainer.withOpacity(
+                            0.9,
+                          ),
                           textColor: colorScheme.onSecondaryContainer,
                         ),
                       ],
@@ -1807,25 +2108,22 @@ class _GalleryScreenState extends State<GalleryScreen>
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
           sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final album = otherAlbums[index];
-                return Padding(
-                  padding: EdgeInsets.only(
-                    bottom: index == otherAlbums.length - 1 ? 0 : 12,
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final album = otherAlbums[index];
+              return Padding(
+                padding: EdgeInsets.only(
+                  bottom: index == otherAlbums.length - 1 ? 0 : 12,
+                ),
+                child: RepaintBoundary(
+                  child: gallery_album_widgets.buildAlbumListTile(
+                    album: album,
+                    colorScheme: colorScheme,
+                    buildImage: buildImage,
+                    onTap: () => openAlbum(album),
                   ),
-                  child: RepaintBoundary(
-                    child: gallery_album_widgets.buildAlbumListTile(
-                      album: album,
-                      colorScheme: colorScheme,
-                      buildImage: buildImage,
-                      onTap: () => openAlbum(album),
-                    ),
-                  ),
-                );
-              },
-              childCount: otherAlbums.length,
-            ),
+                ),
+              );
+            }, childCount: otherAlbums.length),
           ),
         ),
       ],
@@ -1837,8 +2135,10 @@ class _GalleryScreenState extends State<GalleryScreen>
     List<AssetEntity> visibleImages,
     int absoluteIndex,
   ) {
-    final ImageProvider<Object> previewProvider =
-        _thumbnailProviderFor(asset, galleryThumbPx);
+    final ImageProvider<Object> previewProvider = _thumbnailProviderFor(
+      asset,
+      galleryThumbPx,
+    );
     final openingProvider = ViewerScreen.openingImageProvider(context, asset);
     final isRecycleBinTab = selectedIndex == 4;
     final isSelected = selectedAssetIds.contains(asset.id);
@@ -1863,7 +2163,11 @@ class _GalleryScreenState extends State<GalleryScreen>
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 14),
+                    const Icon(
+                      Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 14,
+                    ),
                     const SizedBox(width: 2),
                     Text(
                       _formatDuration(asset.videoDuration),
@@ -1889,30 +2193,36 @@ class _GalleryScreenState extends State<GalleryScreen>
         _isViewerTransitioning = true;
 
         if (asset.type == AssetType.video) {
-          final videoList =
-              visibleImages.where((e) => e.type == AssetType.video).toList();
+          final videoList = visibleImages
+              .where((e) => e.type == AssetType.video)
+              .toList();
           var videoIndex = videoList.indexWhere((e) => e.id == asset.id);
           if (videoIndex == -1) {
             videoList.insert(0, asset);
             videoIndex = 0;
           }
 
-          final movedToRecycleBin = await Navigator.push<bool>(
+          final viewerAction = await Navigator.push<String>(
             context,
             buildCinematicRoute(
               VideoViewerScreen(videos: videoList, initialIndex: videoIndex),
             ),
           );
-          if (movedToRecycleBin == true && mounted) {
+          if ((viewerAction == 'recycle' || viewerAction == 'vault') &&
+              mounted) {
             await _refreshMediaAfterRecycleChange();
             if (!mounted) return;
-            _showRecycleSnackBar('Moved to recycle bin');
+            _showRecycleSnackBar(
+              viewerAction == 'vault'
+                  ? 'Moved to Safe Folder'
+                  : 'Moved to recycle bin',
+            );
           }
         } else {
           unawaited(precacheImage(previewProvider, context));
           unawaited(precacheImage(openingProvider, context));
 
-          final movedToRecycleBin = await Navigator.push<bool>(
+          final viewerAction = await Navigator.push<String>(
             context,
             buildCinematicRoute(
               ViewerScreen(
@@ -1923,10 +2233,15 @@ class _GalleryScreenState extends State<GalleryScreen>
               ),
             ),
           );
-          if (movedToRecycleBin == true && mounted) {
+          if ((viewerAction == 'recycle' || viewerAction == 'vault') &&
+              mounted) {
             await _refreshMediaAfterRecycleChange();
             if (!mounted) return;
-            _showRecycleSnackBar('Moved to recycle bin');
+            _showRecycleSnackBar(
+              viewerAction == 'vault'
+                  ? 'Moved to Safe Folder'
+                  : 'Moved to recycle bin',
+            );
           }
         }
         if (!mounted) return;
@@ -1973,39 +2288,35 @@ class _GalleryScreenState extends State<GalleryScreen>
     };
 
     final slivers = <Widget>[
-      for (var sectionIndex = 0; sectionIndex < sections.length; sectionIndex++)
-        ...[
-          SliverToBoxAdapter(
-            child: gallery_grid_widgets.buildGallerySectionHeader(
-              sections[sectionIndex],
-              colorScheme,
-              sectionIndex == 0,
+      for (
+        var sectionIndex = 0;
+        sectionIndex < sections.length;
+        sectionIndex++
+      ) ...[
+        SliverToBoxAdapter(
+          child: gallery_grid_widgets.buildGallerySectionHeader(
+            sections[sectionIndex],
+            colorScheme,
+            sectionIndex == 0,
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.only(top: 6),
+          sliver: SliverGrid(
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final asset = sections[sectionIndex].items[index];
+              final absoluteIndex = indexByAssetId[asset.id] ?? 0;
+              return buildGridTile(asset, visibleImages, absoluteIndex);
+            }, childCount: sections[sectionIndex].items.length),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: galleryGridCount,
+              mainAxisSpacing: 6,
+              crossAxisSpacing: 6,
+              childAspectRatio: 1,
             ),
           ),
-          SliverPadding(
-            padding: const EdgeInsets.only(top: 6),
-            sliver: SliverGrid(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final asset = sections[sectionIndex].items[index];
-                  final absoluteIndex = indexByAssetId[asset.id] ?? 0;
-                  return buildGridTile(
-                    asset,
-                    visibleImages,
-                    absoluteIndex,
-                  );
-                },
-                childCount: sections[sectionIndex].items.length,
-              ),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: galleryGridCount,
-                mainAxisSpacing: 6,
-                crossAxisSpacing: 6,
-                childAspectRatio: 1,
-              ),
-            ),
-          ),
-        ],
+        ),
+      ],
     ];
 
     return Listener(
@@ -2089,8 +2400,8 @@ class _GalleryScreenState extends State<GalleryScreen>
           key: controller == scrollController
               ? _galleryScrollKey
               : controller == favoritesScrollController
-                  ? _favoritesScrollKey
-                  : PageStorageKey('grid-$selectedIndex'),
+              ? _favoritesScrollKey
+              : PageStorageKey('grid-$selectedIndex'),
           controller: controller,
           cacheExtent: 600,
           physics: _isPinching
@@ -2153,7 +2464,9 @@ class _GalleryScreenState extends State<GalleryScreen>
         child: Center(child: CircularProgressIndicator()),
       );
     }
-    if ((selectedIndex == 0 || selectedIndex == 1) && permissionState != null && !permissionState!.hasAccess) {
+    if ((selectedIndex == 0 || selectedIndex == 1) &&
+        permissionState != null &&
+        !permissionState!.hasAccess) {
       return KeyedSubtree(
         key: const ValueKey('permission-empty'),
         child: Center(
@@ -2229,7 +2542,7 @@ class _GalleryScreenState extends State<GalleryScreen>
         ),
       );
     }
-    
+
     ScrollController currentController = scrollController;
     if (selectedIndex == 1) {
       currentController = videosScrollController;
@@ -2239,11 +2552,7 @@ class _GalleryScreenState extends State<GalleryScreen>
 
     return KeyedSubtree(
       key: ValueKey('grid-$selectedIndex'),
-      child: buildGridView(
-        visibleImages,
-        colorScheme,
-        currentController,
-      ),
+      child: buildGridView(visibleImages, colorScheme, currentController),
     );
   }
 
@@ -2252,8 +2561,9 @@ class _GalleryScreenState extends State<GalleryScreen>
     final themeProvider = context.watch<ThemeProvider>();
     final isDark = themeProvider.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
-    final topBarColor =
-        isDark ? const Color(0xFF120C24) : const Color(0xFFF1E8FF);
+    final topBarColor = isDark
+        ? const Color(0xFF120C24)
+        : const Color(0xFFF1E8FF);
     final titles = ['Gallery', 'Videos', 'Albums', 'Favorites', 'Recycle Bin'];
 
     List<AssetEntity> visibleImages = images;
@@ -2294,38 +2604,48 @@ class _GalleryScreenState extends State<GalleryScreen>
               ),
             );
           },
-          child: Text(
-            isSelectionMode
-                ? '${selectedAssetIds.length} selected'
-                : titles[selectedIndex],
-            key: ValueKey('${selectedIndex}_${selectedAssetIds.length}'),
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapDown: isSelectionMode || selectedIndex != 0
+                ? null
+                : (_) => _startVaultEntryPress(),
+            onTapUp: isSelectionMode || selectedIndex != 0
+                ? null
+                : (_) => _cancelVaultEntryPress(),
+            onTapCancel: isSelectionMode || selectedIndex != 0
+                ? null
+                : _cancelVaultEntryPress,
+            child: AnimatedScale(
+              scale: _isVaultEntryPressing ? 0.96 : 1,
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              child: Text(
+                isSelectionMode
+                    ? '${selectedAssetIds.length} selected'
+                    : titles[selectedIndex],
+                key: ValueKey('${selectedIndex}_${selectedAssetIds.length}'),
+              ),
+            ),
           ),
         ),
         backgroundColor: topBarColor,
         surfaceTintColor: Colors.transparent,
         systemOverlayStyle: overlayStyle.copyWith(
           statusBarColor: topBarColor,
-          statusBarIconBrightness:
-              isDark ? Brightness.light : Brightness.dark,
-          systemNavigationBarColor:
-              isDark ? const Color(0xFF101916) : const Color(0xFFF5F6F0),
-          systemNavigationBarIconBrightness:
-              isDark ? Brightness.light : Brightness.dark,
+          statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+          systemNavigationBarColor: isDark
+              ? const Color(0xFF101916)
+              : const Color(0xFFF5F6F0),
+          systemNavigationBarIconBrightness: isDark
+              ? Brightness.light
+              : Brightness.dark,
         ),
         actions: [
           if (isSelectionMode && selectedIndex != 2)
             IconButton(
-              tooltip: visibleImages.isNotEmpty &&
-                      visibleImages.every((asset) => selectedAssetIds.contains(asset.id))
-                  ? 'Deselect all'
-                  : 'Select all',
-              icon: Icon(
-                visibleImages.isNotEmpty &&
-                        visibleImages.every((asset) => selectedAssetIds.contains(asset.id))
-                    ? Icons.remove_done_rounded
-                    : Icons.select_all_rounded,
-              ),
-              onPressed: () => _toggleSelectAllForCurrentTab(visibleImages),
+              tooltip: 'Actions',
+              icon: const Icon(Icons.more_vert_rounded),
+              onPressed: _showSelectionMenu,
             ),
           if (isSelectionMode && selectedIndex == 4)
             IconButton(
@@ -2356,14 +2676,6 @@ class _GalleryScreenState extends State<GalleryScreen>
                   ),
                 ),
               ),
-            ),
-          if (isSelectionMode && selectedIndex != 4 && selectedIndex != 2)
-            IconButton(
-              tooltip: 'Move to recycle bin',
-              icon: const Icon(Icons.delete_rounded),
-              onPressed: isRecycleActionInProgress
-                  ? null
-                  : moveSelectionToRecycleBin,
             ),
           if (!isSelectionMode)
             IconButton(
@@ -2407,9 +2719,9 @@ class _GalleryScreenState extends State<GalleryScreen>
                 height: 220,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFFA855F7).withOpacity(
-                    isDark ? 0.18 : 0.24,
-                  ),
+                  color: const Color(
+                    0xFFA855F7,
+                  ).withOpacity(isDark ? 0.18 : 0.24),
                 ),
               ),
             ),
@@ -2423,9 +2735,9 @@ class _GalleryScreenState extends State<GalleryScreen>
                 height: 200,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFFDDD6FE).withOpacity(
-                    isDark ? 0.08 : 0.4,
-                  ),
+                  color: const Color(
+                    0xFFDDD6FE,
+                  ).withOpacity(isDark ? 0.08 : 0.4),
                 ),
               ),
             ),

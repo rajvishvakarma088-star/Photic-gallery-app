@@ -90,6 +90,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       } else {
         selectedAssetIds.addAll(assetIds);
       }
+      _gridTileKeys.clear();
     });
   }
 
@@ -175,13 +176,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     double velocity = 0;
 
     if (globalPosition.dy < rect.top + edgeThreshold) {
-      velocity = -(((rect.top + edgeThreshold) - globalPosition.dy) /
-                  edgeThreshold)
+      velocity =
+          -(((rect.top + edgeThreshold) - globalPosition.dy) / edgeThreshold)
               .clamp(0.2, 1.0) *
           18;
     } else if (globalPosition.dy > rect.bottom - edgeThreshold) {
-      velocity = (((globalPosition.dy - (rect.bottom - edgeThreshold)) /
-                  edgeThreshold)
+      velocity =
+          (((globalPosition.dy - (rect.bottom - edgeThreshold)) / edgeThreshold)
               .clamp(0.2, 1.0)) *
           18;
     }
@@ -194,7 +195,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
 
     _dragAutoScrollVelocity = velocity;
-    _dragAutoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+    _dragAutoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (
+      _,
+    ) {
       final dragPosition = _lastDragGlobalPosition;
       if (_dragSelectionTargetValue == null ||
           !_activeGridScrollController.hasClients ||
@@ -226,6 +229,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   @override
   void dispose() {
     _dragAutoScrollTimer?.cancel();
+    _gridTileKeys.clear();
     photoScrollController.dispose();
     videoScrollController.dispose();
     mediaPageController.dispose();
@@ -236,8 +240,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Widget build(BuildContext context) {
     final themeProvider = context.watch<ThemeProvider>();
     final isDark = themeProvider.isDark(context);
-    final topBarColor =
-        isDark ? const Color(0xFF120C24) : const Color(0xFFF1E8FF);
+    final topBarColor = isDark
+        ? const Color(0xFF120C24)
+        : const Color(0xFFF1E8FF);
 
     final overlayStyle = isDark
         ? SystemUiOverlayStyle.light
@@ -282,19 +287,23 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         surfaceTintColor: Colors.transparent,
         systemOverlayStyle: overlayStyle.copyWith(
           statusBarColor: topBarColor,
-          statusBarIconBrightness:
-              isDark ? Brightness.light : Brightness.dark,
+          statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
         ),
         actions: [
           if (isSelectionMode)
             IconButton(
-              tooltip: visibleAssets.isNotEmpty &&
-                      visibleAssets.every((asset) => selectedAssetIds.contains(asset.id))
+              tooltip:
+                  visibleAssets.isNotEmpty &&
+                      visibleAssets.every(
+                        (asset) => selectedAssetIds.contains(asset.id),
+                      )
                   ? 'Deselect all'
                   : 'Select all',
               icon: Icon(
                 visibleAssets.isNotEmpty &&
-                        visibleAssets.every((asset) => selectedAssetIds.contains(asset.id))
+                        visibleAssets.every(
+                          (asset) => selectedAssetIds.contains(asset.id),
+                        )
                     ? Icons.remove_done_rounded
                     : Icons.select_all_rounded,
               ),
@@ -340,9 +349,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 height: 210,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFFA855F7).withOpacity(
-                    isDark ? 0.18 : 0.24,
-                  ),
+                  color: const Color(
+                    0xFFA855F7,
+                  ).withOpacity(isDark ? 0.18 : 0.24),
                 ),
               ),
             ),
@@ -405,8 +414,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                       updatedAccumulator /= pinchStepInThreshold;
                     }
 
-                    _pinchAccumulator =
-                        updatedAccumulator.clamp(0.75, 1.25).toDouble();
+                    _pinchAccumulator = updatedAccumulator
+                        .clamp(0.75, 1.25)
+                        .toDouble();
                     if (nextCount == albumGridCount) return;
 
                     final now = DateTime.now();
@@ -439,6 +449,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                             setState(() {
                               selectedMediaTab = index;
                               selectedAssetIds.clear();
+                              _gridTileKeys.clear();
                             });
                           },
                           children: [
@@ -505,7 +516,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   Widget _buildAssetGrid(List<AssetEntity> assets) {
     return GridView.builder(
-      key: ValueKey('album-grid-$albumGridCount-$selectedMediaTab-${assets.length}'),
+      key: ValueKey(
+        'album-grid-$albumGridCount-$selectedMediaTab-${assets.length}',
+      ),
       controller: selectedMediaTab == 0
           ? photoScrollController
           : videoScrollController,
@@ -524,16 +537,16 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       itemBuilder: (context, index) {
         final asset = assets[index];
         final tileKey = _gridTileKeys.putIfAbsent(asset.id, GlobalKey.new);
-        final ImageProvider<Object> previewProvider =
-            thumbnailProviderCache.putIfAbsent(
-          '${asset.id}@$albumThumbPx',
-          () => AssetEntityImageProvider(
-            asset,
-            isOriginal: false,
-            thumbnailSize: ThumbnailSize.square(albumThumbPx),
-            thumbnailFormat: ThumbnailFormat.jpeg,
-          ),
-        );
+        final ImageProvider<Object> previewProvider = thumbnailProviderCache
+            .putIfAbsent(
+              '${asset.id}@$albumThumbPx',
+              () => AssetEntityImageProvider(
+                asset,
+                isOriginal: false,
+                thumbnailSize: ThumbnailSize.square(albumThumbPx),
+                thumbnailFormat: ThumbnailFormat.jpeg,
+              ),
+            );
         return _AlbumReveal(
           order: index,
           child: RepaintBoundary(
@@ -560,7 +573,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 }
 
                 if (asset.type == AssetType.video) {
-                  final movedToRecycleBin = await Navigator.push<bool>(
+                  final viewerAction = await Navigator.push<String>(
                     context,
                     buildCinematicRoute(
                       VideoViewerScreen(
@@ -569,7 +582,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                       ),
                     ),
                   );
-                  if (movedToRecycleBin != true || !mounted) return;
+                  if ((viewerAction != 'recycle' && viewerAction != 'vault') ||
+                      !mounted) {
+                    return;
+                  }
                   setState(() {
                     albumVideos = albumVideos
                         .where((item) => item.id != asset.id)
@@ -581,7 +597,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     asset,
                   );
                   unawaited(precacheImage(openingProvider, context));
-                  final movedToRecycleBin = await Navigator.push<bool>(
+                  final viewerAction = await Navigator.push<String>(
                     context,
                     buildCinematicRoute(
                       ViewerScreen(
@@ -592,7 +608,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                       ),
                     ),
                   );
-                  if (movedToRecycleBin != true || !mounted) return;
+                  if ((viewerAction != 'recycle' && viewerAction != 'vault') ||
+                      !mounted) {
+                    return;
+                  }
                   setState(() {
                     albumImages = albumImages
                         .where((item) => item.id != asset.id)
@@ -604,7 +623,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   ..hideCurrentSnackBar()
                   ..showSnackBar(
                     const SnackBar(
-                      content: Text('Moved to recycle bin'),
+                      content: Text('Removed from gallery'),
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
@@ -644,10 +663,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                           decoration: BoxDecoration(
                             color: Colors.black.withValues(alpha: 0.28),
                             borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color: Colors.white,
-                              width: 2,
-                            ),
+                            border: Border.all(color: Colors.white, width: 2),
                           ),
                           child: const Align(
                             alignment: Alignment.topLeft,
@@ -942,10 +958,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 }
 
 class _AlbumReveal extends StatelessWidget {
-  const _AlbumReveal({
-    required this.order,
-    required this.child,
-  });
+  const _AlbumReveal({required this.order, required this.child});
 
   final int order;
   final Widget child;

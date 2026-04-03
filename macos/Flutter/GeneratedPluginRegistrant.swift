@@ -5,6 +5,8 @@
 import FlutterMacOS
 import Foundation
 
+import flutter_secure_storage_macos
+import local_auth_darwin
 import package_info_plus
 import photo_manager
 import pro_image_editor
@@ -15,6 +17,8 @@ import video_player_avfoundation
 import wakelock_plus
 
 func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
+  FlutterSecureStoragePlugin.register(with: registry.registrar(forPlugin: "FlutterSecureStoragePlugin"))
+  LocalAuthPlugin.register(with: registry.registrar(forPlugin: "LocalAuthPlugin"))
   FPPPackageInfoPlusPlugin.register(with: registry.registrar(forPlugin: "FPPPackageInfoPlusPlugin"))
   PhotoManagerPlugin.register(with: registry.registrar(forPlugin: "PhotoManagerPlugin"))
   ProImageEditorPlugin.register(with: registry.registrar(forPlugin: "ProImageEditorPlugin"))
