@@ -597,7 +597,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     asset,
                   );
                   unawaited(precacheImage(openingProvider, context));
-                  final viewerAction = await Navigator.push<String>(
+                  final dynamic result = await Navigator.push<dynamic>(
                     context,
                     buildCinematicRoute(
                       ViewerScreen(
@@ -608,8 +608,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                       ),
                     ),
                   );
-                  if ((viewerAction != 'recycle' && viewerAction != 'vault') ||
-                      !mounted) {
+                  
+                  if (result == null || !mounted) return;
+                  
+                  if (result is AssetEntity) {
+                    setState(() {
+                      albumImages.insert(0, result);
+                    });
+                    return;
+                  }
+
+                  final String viewerAction = result is String ? result : '';
+                  if (viewerAction != 'recycle' && viewerAction != 'vault') {
                     return;
                   }
                   setState(() {

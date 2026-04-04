@@ -10,10 +10,10 @@ class ThemeProvider extends ChangeNotifier {
     return themeMode == ThemeMode.dark;
   }
 
-  void toggleTheme() {
-    themeMode = themeMode == ThemeMode.dark
-        ? ThemeMode.light
-        : ThemeMode.dark;
+  void toggleTheme(BuildContext context) {
+    // Determine effective brightness (even if themeMode is system)
+    final currentlyDark = isDark(context);
+    themeMode = currentlyDark ? ThemeMode.light : ThemeMode.dark;
     notifyListeners();
   }
 }

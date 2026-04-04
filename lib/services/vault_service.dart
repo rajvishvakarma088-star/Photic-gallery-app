@@ -128,6 +128,19 @@ class VaultService {
   }
 
   Future<VaultItem> moveAssetToVault(AssetEntity asset) async {
+    final item = await _copyAssetToVault(asset);
+    await PhotoManager.editor.deleteWithIds([asset.id]);
+    return item;
+  }
+
+  Future<void> moveAssetsToVault(List<AssetEntity> assets) async {
+    for (final asset in assets) {
+      await _copyAssetToVault(asset);
+    }
+    await PhotoManager.editor.deleteWithIds(assets.map((e) => e.id).toList());
+  }
+
+  Future<VaultItem> _copyAssetToVault(AssetEntity asset) async {
     final sourceFile = await asset.file;
     if (sourceFile == null || !await sourceFile.exists()) {
       throw Exception('Original file is not available');
@@ -143,7 +156,7 @@ class VaultService {
     final targetPath = path.join(targetDirectory.path, fileName);
     final copiedFile = await sourceFile.copy(targetPath);
 
-    final item = await database.addItem(
+    return await database.addItem(
       VaultItem(
         id: null,
         fileName: path.basename(originalPath),
@@ -156,9 +169,6 @@ class VaultService {
         createdAt: DateTime.now(),
       ),
     );
-
-    await PhotoManager.editor.deleteWithIds([asset.id]);
-    return item;
   }
 
   Future<void> deleteVaultItem(VaultItem item) async {

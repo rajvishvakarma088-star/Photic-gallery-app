@@ -7,6 +7,8 @@ class GlassContainer extends StatelessWidget {
   final BorderRadius? borderRadius;
   final bool enableBlur;
   final double blurSigma;
+  final Color? borderColor;
+  final Color? backgroundColor;
 
   const GlassContainer({
     super.key,
@@ -15,6 +17,8 @@ class GlassContainer extends StatelessWidget {
     this.borderRadius,
     this.enableBlur = true,
     this.blurSigma = 10,
+    this.borderColor,
+    this.backgroundColor,
   });
 
   @override
@@ -33,18 +37,22 @@ class GlassContainer extends StatelessWidget {
             const Color(0xFFD8C2FF).withValues(alpha: 0.66),
           ];
 
+    final finalGradient = backgroundColor != null 
+        ? LinearGradient(colors: [backgroundColor!, backgroundColor!])
+        : LinearGradient(
+            colors: gradientColors,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          );
+
     final glassSurface = DecoratedBox(
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: gradientColors,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        gradient: finalGradient,
         borderRadius: radius,
         border: Border.all(
-          color: isDark
+          color: borderColor ?? (isDark
               ? Colors.white.withValues(alpha: 0.2)
-              : Colors.white.withValues(alpha: 0.74),
+              : Colors.white.withValues(alpha: 0.74)),
         ),
         boxShadow: [
           BoxShadow(

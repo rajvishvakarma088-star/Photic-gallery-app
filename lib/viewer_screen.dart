@@ -11,6 +11,7 @@ import 'dart:ui';
 import 'package:share_plus/share_plus.dart';
 import 'package:pro_image_editor/pro_image_editor.dart';
 
+import 'package:path_provider/path_provider.dart';
 import 'glass_container.dart';
 import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
@@ -65,6 +66,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
   Timer? thumbnailStripTimer;
   Timer? deferredNeighborWarmupTimer;
   bool isInteractingWithStrip = false;
+  bool _editCompleted = false;
+  AssetEntity? _newAssetPostEdit;
 
   double detailsDrag = 0;
   bool showDetails = false;
@@ -411,7 +414,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                     final upwardDrag = upwardDragNotifier.value;
 
                     if (verticalDrag > 150 || velocity > 700) {
-                      Navigator.pop(context);
+                      Navigator.pop(context, _newAssetPostEdit ?? (_editCompleted ? 'edited' : null));
                     } else if (velocity < -140 || upwardDrag > 60) {
                       openDetails();
                     } else {
@@ -530,7 +533,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                       child: glassButton(
                         icon: Icons.arrow_back,
                         isDark: isDark,
-                        onTap: () => Navigator.pop(context),
+                        onTap: () => Navigator.pop(context, _newAssetPostEdit ?? (_editCompleted ? 'edited' : null)),
                       ),
                     ),
                   ),
@@ -810,7 +813,32 @@ class _ViewerScreenState extends State<ViewerScreen> {
           file,
           callbacks: ProImageEditorCallbacks(
             onImageEditingComplete: (Uint8List bytes) async {
-              Navigator.pop(context);
+              try {
+                final tempDir = await getTemporaryDirectory();
+                final String originalName = asset.title ?? 'image';
+                final String extension = path.extension(file.path).isEmpty ? '.jpg' : path.extension(file.path);
+                final String baseName = path.basenameWithoutExtension(originalName);
+                final String newFileName = '${baseName}_edited_${DateTime.now().millisecondsSinceEpoch}$extension';
+                final File tempFile = File('${tempDir.path}/$newFileName');
+                
+                await tempFile.writeAsBytes(bytes);
+                
+                final AssetEntity? result = await PhotoManager.editor.saveImageWithPath(
+                  tempFile.path,
+                  title: newFileName,
+                );
+                
+                if (result != null) {
+                  _editCompleted = true;
+                  _newAssetPostEdit = result;
+                  _showViewerSnackBar('Saved as a new copy');
+                }
+              } catch (e) {
+                print('Error saving image: $e');
+                _showViewerSnackBar('Failed to save copy');
+              } finally {
+                Navigator.pop(context);
+              }
             },
           ),
         ),
@@ -818,7 +846,105 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
+  Future<bool> _confirmMoveToVault() async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      builder: (dialogContext) {
+        final colorScheme = Theme.of(dialogContext).colorScheme;
+        final isDark = Theme.of(dialogContext).brightness == Brightness.dark;
+
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: GlassContainer(
+            borderRadius: BorderRadius.circular(34),
+            blurSigma: 18,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withValues(
+                            alpha: isDark ? 0.12 : 0.32,
+                          ),
+                        ),
+                        child: Icon(
+                          Icons.lock_outline_rounded,
+                          color: colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          'Move To Safe Folder?',
+                          style: TextStyle(
+                            color: colorScheme.onSurface,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'This item will be moved to your safe folder and hidden from your library. You can restore it later.',
+                    style: TextStyle(
+                      color: colorScheme.onSurface.withValues(alpha: 0.76),
+                      height: 1.42,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(dialogContext, false),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            side: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.28),
+                            ),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(dialogContext, true),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Move'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    return result ?? false;
+  }
+
   Future<void> hideAsset() async {
+    final shouldMove = await _confirmMoveToVault();
+    if (!shouldMove || !mounted) return;
+
     try {
       await vaultService.moveAssetToVault(_currentAsset);
       if (!mounted) return;

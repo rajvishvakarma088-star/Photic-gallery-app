@@ -245,13 +245,22 @@ class GalleryService {
 
     final lower = trimmed.toLowerCase();
     if (lower == 'all' || lower == 'recent' || lower == 'recently added') {
-      return 'All Photos';
+      return 'All Photos and Videos';
     }
     if (lower == 'dcim' || lower.contains('camera')) {
       return 'Camera';
     }
-    if (lower.contains('whatsapp')) {
+    if (lower == 'whatsapp') {
       return 'WhatsApp';
+    }
+    if (lower.contains('whatsapp image')) {
+      return 'WhatsApp Images';
+    }
+    if (lower.contains('whatsapp video')) {
+      return 'WhatsApp Video';
+    }
+    if (lower.contains('whatsapp document')) {
+      return 'WhatsApp Documents';
     }
     if (lower.contains('screenshot')) {
       return 'Screenshots';

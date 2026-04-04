@@ -20,7 +20,12 @@ import 'viewer_screen.dart';
 import 'video_viewer_screen.dart';
 import 'vault_lock_screen.dart';
 import 'services/vault_service.dart';
+import 'services/music_service.dart';
 import 'theme_provider.dart';
+import 'music_screen.dart';
+import 'services/audio_player_service.dart';
+import 'mini_music_player.dart';
+import 'music_player_screen.dart';
 
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key});
@@ -34,11 +39,13 @@ class _GalleryScreenState extends State<GalleryScreen>
   final GalleryService service = GalleryService();
   final FavoritesDatabase favoritesDatabase = FavoritesDatabase.instance;
   final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
+  late AudioPlayerService audioPlayerService;
   final ScrollController scrollController = ScrollController();
   final ScrollController videosScrollController = ScrollController();
   final ScrollController favoritesScrollController = ScrollController();
   final ScrollController albumsScrollController = ScrollController();
   final ScrollController recycleBinScrollController = ScrollController();
+  final ScrollController musicScrollController = ScrollController();
   final PageStorageKey _galleryScrollKey = const PageStorageKey(
     'gallery-scroll',
   );
@@ -60,6 +67,8 @@ class _GalleryScreenState extends State<GalleryScreen>
   final Set<String> recycleBinIds = {};
   final Set<String> selectedAssetIds = {};
   final Map<String, GlobalKey> _gridTileKeys = {};
+  int? _dragSelectionStartIndex;
+  Set<String>? _dragSelectionInitialIds;
 
   final Map<String, AssetEntityImageProvider> thumbnailProviderCache = {};
   final Set<String> warmedThumbnailKeys = {};
@@ -106,6 +115,7 @@ class _GalleryScreenState extends State<GalleryScreen>
   int _lastWarmedEnd = -1;
   bool _isVaultEntryPressing = false;
   bool _isOpeningVault = false;
+  final Set<AssetEntity> _pendingAssets = {};
 
   bool get _isPinching => _activePointers >= 2;
   bool get isSelectionMode => selectedAssetIds.isNotEmpty;
@@ -135,6 +145,7 @@ class _GalleryScreenState extends State<GalleryScreen>
   @override
   void initState() {
     super.initState();
+    audioPlayerService = AudioPlayerService();
     WidgetsBinding.instance.addObserver(this);
     scrollController.addListener(onScroll);
     videosScrollController.addListener(onScroll);
@@ -157,6 +168,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     favoritesScrollController.dispose();
     albumsScrollController.dispose();
     recycleBinScrollController.dispose();
+    musicScrollController.dispose();
     super.dispose();
   }
 
@@ -384,7 +396,9 @@ class _GalleryScreenState extends State<GalleryScreen>
   ScrollController? get _activeDragSelectionScrollController {
     if (selectedIndex == 0) return scrollController;
     if (selectedIndex == 1) return videosScrollController;
-    if (selectedIndex == 3) return favoritesScrollController;
+    if (selectedIndex == 4) return favoritesScrollController;
+    if (selectedIndex == 3) return albumsScrollController;
+    if (selectedIndex == 5) return recycleBinScrollController;
     return null;
   }
 
@@ -394,6 +408,11 @@ class _GalleryScreenState extends State<GalleryScreen>
     _dragSelectionTouchedIds
       ..clear()
       ..add(asset.id);
+    
+    // Find index of start asset in visible items to support range selection
+    final visibleItems = _getVisibleItemsForCurrentTab();
+    _dragSelectionStartIndex = visibleItems.indexWhere((e) => e.id == asset.id);
+    _dragSelectionInitialIds = Set.from(selectedAssetIds);
 
     setState(() {
       if (_dragSelectionTargetValue!) {
@@ -404,6 +423,22 @@ class _GalleryScreenState extends State<GalleryScreen>
     });
   }
 
+  List<AssetEntity> _getVisibleItemsForCurrentTab() {
+    switch (selectedIndex) {
+      case 1: // Videos
+        return videos;
+      case 4: // Favorites
+        return favoriteImages;
+      case 5: // Recycle Bin
+        return recycleBinItems;
+      case 2: // Songs
+        return MusicService().musicCache.map((m) => m.asset).whereType<AssetEntity>().toList();
+      case 0:
+      default:
+        return images;
+    }
+  }
+
   void _updateDragSelection(
     Offset globalPosition,
     List<AssetEntity> visibleImages,
@@ -412,25 +447,56 @@ class _GalleryScreenState extends State<GalleryScreen>
     final targetValue = _dragSelectionTargetValue;
     if (targetValue == null) return;
 
-    for (final asset in visibleImages) {
-      final key = _gridTileKeys[asset.id];
+    final visibleItems = _getVisibleItemsForCurrentTab();
+    int? currentHoverIndex;
+
+    for (var i = 0; i < visibleItems.length; i++) {
+      final asset = visibleItems[i];
+      // Note: grid tiles use tab-specific keys to avoid conflicts
+      final key = _gridTileKeys['tab_${selectedIndex}_${asset.id}'];
       final context = key?.currentContext;
       if (context == null) continue;
       final box = context.findRenderObject() as RenderBox?;
       if (box == null || !box.hasSize) continue;
       final rect = box.localToGlobal(Offset.zero) & box.size;
-      if (rect.contains(globalPosition)) {
-        _applyDragSelection(asset);
+      
+      // Expand hit detection slightly for better feel when dragging
+      if (rect.inflate(4).contains(globalPosition)) {
+        currentHoverIndex = i;
         break;
       }
     }
 
-    _updateDragAutoScroll(globalPosition, visibleImages);
+    if (currentHoverIndex != null && _dragSelectionStartIndex != null) {
+      final start = _dragSelectionStartIndex!;
+      final end = currentHoverIndex;
+      final minIdx = start < end ? start : end;
+      final maxIdx = start < end ? end : start;
+
+      setState(() {
+        // Reset to initial and apply current range
+        selectedAssetIds.clear();
+        selectedAssetIds.addAll(_dragSelectionInitialIds ?? {});
+        
+        for (var i = minIdx; i <= maxIdx; i++) {
+          final id = visibleItems[i].id;
+          if (targetValue) {
+            selectedAssetIds.add(id);
+          } else {
+            selectedAssetIds.remove(id);
+          }
+        }
+      });
+    }
+
+    _updateDragAutoScroll(globalPosition, visibleItems);
   }
 
   void _endDragSelection() {
     _dragSelectionTargetValue = null;
     _dragSelectionTouchedIds.clear();
+    _dragSelectionStartIndex = null;
+    _dragSelectionInitialIds = null;
     _lastDragGlobalPosition = null;
     _dragAutoScrollVelocity = 0;
     _dragAutoScrollTimer?.cancel();
@@ -500,6 +566,7 @@ class _GalleryScreenState extends State<GalleryScreen>
   }
 
   Future<void> _refreshMediaAfterRecycleChange() async {
+    service.clearCache(); // Force service to re-find paths (crucial for new files)
     final galleryPageToKeep = currentPage;
     final videoPageToKeep = currentVideoPage;
     await Future.wait([
@@ -515,6 +582,7 @@ class _GalleryScreenState extends State<GalleryScreen>
         targetPage: videoPageToKeep,
       ),
       syncFavoriteImages(showLoading: false),
+      MusicService().fetchMusicsPaged(refresh: true),
     ]);
   }
 
@@ -643,6 +711,7 @@ class _GalleryScreenState extends State<GalleryScreen>
       ...videos,
       ...favoriteImages,
       ...recycleBinItems,
+      ...MusicService().musicCache.map((m) => m.asset).whereType<AssetEntity>(),
     ];
     final byId = <String, AssetEntity>{};
     for (final asset in source) {
@@ -758,19 +827,116 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
   }
 
+  Future<bool> _confirmMoveToVault(int count) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      builder: (dialogContext) {
+        final colorScheme = Theme.of(dialogContext).colorScheme;
+        final isDark = Theme.of(dialogContext).brightness == Brightness.dark;
+
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: GlassContainer(
+            borderRadius: BorderRadius.circular(34),
+            blurSigma: 18,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withValues(
+                            alpha: isDark ? 0.12 : 0.32,
+                          ),
+                        ),
+                        child: Icon(
+                          Icons.lock_outline_rounded,
+                          color: colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          'Move To Safe Folder?',
+                          style: TextStyle(
+                            color: colorScheme.onSurface,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    count == 1
+                        ? 'This item will be moved to your safe folder and hidden from your library. You can restore it later.'
+                        : '$count items will be moved to your safe folder and hidden from your library. You can restore them later.',
+                    style: TextStyle(
+                      color: colorScheme.onSurface.withValues(alpha: 0.76),
+                      height: 1.42,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(dialogContext, false),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            side: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.28),
+                            ),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(dialogContext, true),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Move'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    return result ?? false;
+  }
+
   Future<void> moveSelectionToVault() async {
     final ids = selectedAssetIds.toList(growable: false);
     final assets = _selectedAssetsFromVisibleItems();
     if (ids.isEmpty || isRecycleActionInProgress) return;
 
+    final shouldMove = await _confirmMoveToVault(ids.length);
+    if (!shouldMove || !mounted) return;
+
     setState(() {
       isRecycleActionInProgress = true;
     });
     try {
-      final vaultService = VaultService.instance;
-      for (final asset in assets) {
-        await vaultService.moveAssetToVault(asset);
-      }
+      await VaultService.instance.moveAssetsToVault(assets);
 
       if (!mounted) return;
 
@@ -787,6 +953,8 @@ class _GalleryScreenState extends State<GalleryScreen>
       _showRecycleSnackBar(
         '${ids.length} item${ids.length == 1 ? '' : 's'} moved to Safe Folder',
       );
+    } catch (e) {
+      if (mounted) _showRecycleSnackBar('Failed to move to Safe Folder');
     } finally {
       if (mounted) {
         setState(() {
@@ -817,12 +985,19 @@ class _GalleryScreenState extends State<GalleryScreen>
 
   Future<void> _showSelectionMenu() async {
     List<AssetEntity> getVisibleImages() {
-      if (selectedIndex == 1) {
-        return videos;
-      } else if (selectedIndex == 3) {
-        return favoriteImages;
+      switch (selectedIndex) {
+        case 1: // Videos
+          return videos;
+        case 2: // Music
+          return MusicService().musicCache.map((m) => m.asset).whereType<AssetEntity>().toList();
+        case 4: // Favorites
+          return favoriteImages;
+        case 5: // Recycle Bin
+          return recycleBinItems;
+        case 0: // Gallery
+        default:
+          return images;
       }
-      return images;
     }
 
     final visibleImages = getVisibleImages();
@@ -887,6 +1062,24 @@ class _GalleryScreenState extends State<GalleryScreen>
                             await shareSelection();
                           },
                         ),
+                        if (selectedIndex == 4)
+                          _buildMenuTile(
+                            Icons.favorite_outline_rounded,
+                            'Unfavorite items',
+                            colorScheme,
+                            () async {
+                              Navigator.pop(dialogContext);
+                              await unfavoriteSelection();
+                            },
+                          ),
+                        if (selectedIndex == 4)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            child: Divider(
+                              color: colorScheme.outlineVariant.withValues(alpha: 0.3),
+                              height: 1,
+                            ),
+                          ),
                         _buildMenuTile(
                           Icons.lock_rounded,
                           'Move to Safe Folder',
@@ -941,6 +1134,23 @@ class _GalleryScreenState extends State<GalleryScreen>
         );
       },
     );
+  }
+
+  Future<void> unfavoriteSelection() async {
+    final ids = selectedAssetIds.toList();
+    if (ids.isEmpty) return;
+    
+    for (final id in ids) {
+      await favoritesDatabase.removeFavorite(id);
+    }
+    
+    if (!mounted) return;
+    setState(() {
+      favorites.removeAll(ids);
+      favoriteImages.removeWhere((asset) => ids.contains(asset.id));
+      selectedAssetIds.clear();
+    });
+    _showRecycleSnackBar('Removed ${ids.length} from favorites');
   }
 
   Widget _buildMenuTile(
@@ -1178,7 +1388,17 @@ class _GalleryScreenState extends State<GalleryScreen>
                                           child: Stack(
                                             fit: StackFit.expand,
                                             children: [
-                                              buildImage(asset, thumbPx: 128),
+                                              asset.type == AssetType.audio
+                                                  ? Container(
+                                                      color: colorScheme.primary
+                                                          .withValues(alpha: 0.12),
+                                                      child: Icon(
+                                                        Icons.music_note_rounded,
+                                                        color: colorScheme.primary,
+                                                        size: 32,
+                                                      ),
+                                                    )
+                                                  : buildImage(asset, thumbPx: 128),
                                               if (asset.type == AssetType.video)
                                                 Align(
                                                   alignment:
@@ -1253,7 +1473,9 @@ class _GalleryScreenState extends State<GalleryScreen>
                                             Text(
                                               asset.type == AssetType.video
                                                   ? 'Video • Swipe left to restore'
-                                                  : 'Photo • Swipe left to restore',
+                                                  : asset.type == AssetType.audio
+                                                      ? 'Music • Swipe left to restore'
+                                                      : 'Photo • Swipe left to restore',
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
                                               style: TextStyle(
@@ -1576,12 +1798,29 @@ class _GalleryScreenState extends State<GalleryScreen>
 
     setState(() {
       if (loadMore) {
+        // Prepend pending assets if they match the type and are not already present
+        final toPrepend = _pendingAssets.where((a) => 
+          (selectedIndex == 1 ? a.type == AssetType.video : a.type == AssetType.image) &&
+          !data.any((existing) => existing.id == a.id)
+        ).toList();
+        
         images.addAll(data);
         isLoadingMore = false;
         currentPage = resolvedPage;
         hasMore = resolvedHasMore;
       } else {
-        images = data;
+        // Prepend pending assets that are not yet in the freshly fetched data
+        final toPrepend = _pendingAssets.where((a) => 
+          (selectedIndex == 1 ? a.type == AssetType.video : a.type == AssetType.image) &&
+          !data.any((existing) => existing.id == a.id)
+        ).toList();
+
+        // Remove from pending if they successfully appeared in the fresh data
+        _pendingAssets.removeWhere((a) => 
+          data.any((existing) => existing.id == a.id)
+        );
+
+        images = [...toPrepend, ...data];
         isLoading = false;
         currentPage = resolvedPage;
         hasMore = resolvedHasMore;
@@ -1666,12 +1905,30 @@ class _GalleryScreenState extends State<GalleryScreen>
 
     setState(() {
       if (loadMore) {
+        // Prepend pending assets if they match the type and are not already present
+        final toPrepend = _pendingAssets.where((a) => 
+          a.type == AssetType.video &&
+          !data.any((existing) => existing.id == a.id)
+        ).toList();
+        
         videos.addAll(data);
         isLoadingMoreVideos = false;
         currentVideoPage = resolvedPage;
         hasMoreVideos = resolvedHasMore;
       } else {
-        videos = data;
+        // Prepend pending assets that are not yet in the freshly fetched data
+        final toPrepend = _pendingAssets.where((a) => 
+          a.type == AssetType.video &&
+          !data.any((existing) => existing.id == a.id)
+        ).toList();
+
+        // Remove from pending if they successfully appeared in the fresh data
+        _pendingAssets.removeWhere((a) => 
+          a.type == AssetType.video &&
+          data.any((existing) => existing.id == a.id)
+        );
+
+        videos = [...toPrepend, ...data];
         isLoadingVideos = false;
         currentVideoPage = resolvedPage;
         hasMoreVideos = resolvedHasMore;
@@ -1769,10 +2026,7 @@ class _GalleryScreenState extends State<GalleryScreen>
   }
 
   void _scheduleThumbnailWarmup() {
-    if (!mounted ||
-        selectedIndex != 0 ||
-        images.isEmpty ||
-        _isViewerTransitioning) {
+    if (!mounted || _isViewerTransitioning) {
       return;
     }
 
@@ -1784,11 +2038,29 @@ class _GalleryScreenState extends State<GalleryScreen>
   }
 
   void _warmVisibleThumbnailBand() {
+    ScrollController activeController = scrollController;
+    List<AssetEntity> activeImages = images;
+
+    if (selectedIndex == 1) {
+      activeController = videosScrollController;
+      activeImages = videos;
+    } else if (selectedIndex == 4) {
+      activeController = favoritesScrollController;
+      activeImages = favoriteImages;
+    } else if (selectedIndex == 3) {
+      activeController = albumsScrollController;
+    } else if (selectedIndex == 5) {
+      activeController = recycleBinScrollController;
+      activeImages = recycleBinItems;
+    }
+
     if (!mounted ||
-        !scrollController.hasClients ||
-        selectedIndex != 0 ||
+        !activeController.hasClients ||
+        activeController.positions.length != 1 ||
         _isViewerTransitioning ||
-        images.isEmpty) {
+        activeImages.isEmpty ||
+        selectedIndex == 2 || // Skip music (it uses own ListView)
+        selectedIndex == 3) { // Skip albums (it uses different layout)
       return;
     }
 
@@ -1796,29 +2068,31 @@ class _GalleryScreenState extends State<GalleryScreen>
     final contentWidth = (viewportWidth - 20 - ((galleryGridCount - 1) * 6))
         .clamp(120.0, 4000.0);
     final tileExtent = (contentWidth / galleryGridCount) + 6;
-    final effectiveOffset = (scrollController.offset - 54).clamp(
+    final effectiveOffset = (activeController.offset - 54).clamp(
       0.0,
       double.infinity,
     );
     final firstVisibleRow = (effectiveOffset / tileExtent).floor();
     final visibleRows =
-        ((scrollController.position.viewportDimension / tileExtent).ceil() + 2)
+        ((activeController.position.viewportDimension / tileExtent).ceil() + 2)
             .clamp(4, 14);
     final startIndex = ((firstVisibleRow - 4) * galleryGridCount).clamp(
       0,
-      images.length,
+      activeImages.length,
     );
     final endIndex = ((firstVisibleRow + visibleRows + 7) * galleryGridCount)
-        .clamp(0, images.length);
+        .clamp(0, activeImages.length);
 
     if (startIndex == _lastWarmedStart && endIndex == _lastWarmedEnd) return;
     _lastWarmedStart = startIndex;
     _lastWarmedEnd = endIndex;
 
     for (var i = startIndex; i < endIndex; i++) {
-      seenThumbnailAssetIds.add(images[i].id);
-      warmedThumbnailKeys.add('${images[i].id}@$galleryThumbPx');
-      precacheImage(_thumbnailProviderFor(images[i], galleryThumbPx), context);
+        if (i >= activeImages.length) break;
+        final asset = activeImages[i];
+        seenThumbnailAssetIds.add(asset.id);
+        warmedThumbnailKeys.add('${asset.id}@$galleryThumbPx');
+        precacheImage(_thumbnailProviderFor(asset, galleryThumbPx), context);
     }
   }
 
@@ -1889,6 +2163,11 @@ class _GalleryScreenState extends State<GalleryScreen>
             icon: Icon(Icons.videocam_outlined),
             selectedIcon: Icon(Icons.videocam),
             label: 'Videos',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.music_note_outlined),
+            selectedIcon: Icon(Icons.music_note),
+            label: 'Music',
           ),
           const NavigationDestination(
             icon: Icon(Icons.folder_copy_outlined),
@@ -1978,19 +2257,10 @@ class _GalleryScreenState extends State<GalleryScreen>
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
             child: RepaintBoundary(
-              child: Container(
+              child: GlassContainer(
                 padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.08)
-                      : Colors.white.withValues(alpha: 0.84),
-                  borderRadius: BorderRadius.circular(32),
-                  border: Border.all(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.12)
-                        : Colors.white.withValues(alpha: 0.55),
-                  ),
-                ),
+                borderRadius: BorderRadius.circular(32),
+                blurSigma: 12,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -2140,9 +2410,12 @@ class _GalleryScreenState extends State<GalleryScreen>
       galleryThumbPx,
     );
     final openingProvider = ViewerScreen.openingImageProvider(context, asset);
-    final isRecycleBinTab = selectedIndex == 4;
+    final isRecycleBinTab = selectedIndex == 5;
     final isSelected = selectedAssetIds.contains(asset.id);
-    final tileKey = _gridTileKeys.putIfAbsent(asset.id, GlobalKey.new);
+    // Use a tab-specific key prefix to avoid Duplicate GlobalKey error during transitions 
+    // or when the same asset appears in multiple tabs (e.g. Gallery and Favorites)
+    final keyString = 'tab_${selectedIndex}_${asset.id}';
+    final tileKey = _gridTileKeys.putIfAbsent(keyString, GlobalKey.new);
 
     return gallery_grid_widgets.buildGalleryGridTile(
       asset: asset,
@@ -2222,7 +2495,7 @@ class _GalleryScreenState extends State<GalleryScreen>
           unawaited(precacheImage(previewProvider, context));
           unawaited(precacheImage(openingProvider, context));
 
-          final viewerAction = await Navigator.push<String>(
+          final dynamic result = await Navigator.push<dynamic>(
             context,
             buildCinematicRoute(
               ViewerScreen(
@@ -2233,15 +2506,48 @@ class _GalleryScreenState extends State<GalleryScreen>
               ),
             ),
           );
-          if ((viewerAction == 'recycle' || viewerAction == 'vault') &&
-              mounted) {
-            await _refreshMediaAfterRecycleChange();
-            if (!mounted) return;
-            _showRecycleSnackBar(
-              viewerAction == 'vault'
-                  ? 'Moved to Safe Folder'
-                  : 'Moved to recycle bin',
-            );
+
+          if (result != null && mounted) {
+            String? action;
+            if (result is String) {
+              action = result;
+            } else if (result is AssetEntity) {
+              action = 'edited';
+              // Perform a truly instant local update before the background refresh
+              setState(() {
+                _pendingAssets.add(result);
+                if (result.type == AssetType.video) {
+                  if (!videos.any((e) => e.id == result.id)) {
+                    videos.insert(0, result);
+                  }
+                } else {
+                  if (!images.any((e) => e.id == result.id)) {
+                    images.insert(0, result);
+                  }
+                }
+              });
+            }
+
+            if (action == 'recycle' || action == 'vault') {
+              await _refreshMediaAfterRecycleChange();
+              if (!mounted) return;
+              _showRecycleSnackBar(
+                action == 'vault'
+                    ? 'Moved to Safe Folder'
+                    : 'Moved to recycle bin',
+              );
+            } else if (action == 'edited') {
+              // For edits, we handle the 'instant' update via _pendingAssets.
+              // We still refresh albums and other metadata, but loadImages 
+              // will now respect our _pendingAssets even if the MediaStore is slow.
+              await Future.wait([
+                loadAlbums(permissionOverride: permissionState),
+                loadImages(permissionOverride: permissionState, showLoading: false),
+                loadVideos(permissionOverride: permissionState, showLoading: false),
+                syncFavoriteImages(showLoading: false),
+                MusicService().fetchMusicsPaged(refresh: true),
+              ]);
+            }
           }
         }
         if (!mounted) return;
@@ -2423,13 +2729,23 @@ class _GalleryScreenState extends State<GalleryScreen>
     ColorScheme colorScheme,
     bool isDark,
   ) {
-    if (selectedIndex == 2) {
+    if (selectedIndex == 3) {
       return KeyedSubtree(
-        key: const ValueKey('albums'),
+        key: const ValueKey('tab-albums-view'),
         child: buildAlbumsView(colorScheme, isDark),
       );
     }
-    if (selectedIndex == 4) {
+    if (selectedIndex == 2) {
+      return KeyedSubtree(
+        key: const ValueKey('tab-music-view'),
+        child: MusicScreen(
+          audioPlayerService: audioPlayerService,
+          selectedIds: selectedAssetIds,
+          onSelectionToggle: toggleSelection,
+        ),
+      );
+    }
+    if (selectedIndex == 5) {
       if (isLoadingRecycleBin) {
         return const KeyedSubtree(
           key: ValueKey('loading-recycle'),
@@ -2452,13 +2768,13 @@ class _GalleryScreenState extends State<GalleryScreen>
         );
       }
       return KeyedSubtree(
-        key: const ValueKey('recycle-list'),
+        key: const ValueKey('tab-recycle-list-view'),
         child: buildRecycleBinListView(colorScheme),
       );
     }
     if ((selectedIndex == 0 && isLoading) ||
         (selectedIndex == 1 && isLoadingVideos) ||
-        (selectedIndex == 3 && isLoadingFavoriteImages)) {
+        (selectedIndex == 4 && isLoadingFavoriteImages)) {
       return const KeyedSubtree(
         key: ValueKey('loading'),
         child: Center(child: CircularProgressIndicator()),
@@ -2524,7 +2840,7 @@ class _GalleryScreenState extends State<GalleryScreen>
       String emptyText = 'No images found';
       if (selectedIndex == 1) {
         emptyText = 'No videos found';
-      } else if (selectedIndex == 3) {
+      } else if (selectedIndex == 4) {
         emptyText = 'No favorite items yet';
       }
 
@@ -2546,12 +2862,16 @@ class _GalleryScreenState extends State<GalleryScreen>
     ScrollController currentController = scrollController;
     if (selectedIndex == 1) {
       currentController = videosScrollController;
-    } else if (selectedIndex == 3) {
+    } else if (selectedIndex == 4) {
       currentController = favoritesScrollController;
+    } else if (selectedIndex == 3) {
+      currentController = albumsScrollController;
+    } else if (selectedIndex == 5) {
+      currentController = recycleBinScrollController;
     }
 
     return KeyedSubtree(
-      key: ValueKey('grid-$selectedIndex'),
+      key: ValueKey('tab-grid-view-$selectedIndex'),
       child: buildGridView(visibleImages, colorScheme, currentController),
     );
   }
@@ -2564,14 +2884,14 @@ class _GalleryScreenState extends State<GalleryScreen>
     final topBarColor = isDark
         ? const Color(0xFF120C24)
         : const Color(0xFFF1E8FF);
-    final titles = ['Gallery', 'Videos', 'Albums', 'Favorites', 'Recycle Bin'];
+    final titles = ['Gallery', 'Videos', 'Music', 'Albums', 'Favorites', 'Recycle Bin'];
 
     List<AssetEntity> visibleImages = images;
     if (selectedIndex == 1) {
       visibleImages = videos;
-    } else if (selectedIndex == 3) {
-      visibleImages = favoriteImages;
     } else if (selectedIndex == 4) {
+      visibleImages = favoriteImages;
+    } else if (selectedIndex == 5) {
       visibleImages = recycleBinItems;
     }
 
@@ -2641,13 +2961,13 @@ class _GalleryScreenState extends State<GalleryScreen>
               : Brightness.dark,
         ),
         actions: [
-          if (isSelectionMode && selectedIndex != 2)
+          if (isSelectionMode)
             IconButton(
               tooltip: 'Actions',
               icon: const Icon(Icons.more_vert_rounded),
               onPressed: _showSelectionMenu,
             ),
-          if (isSelectionMode && selectedIndex == 4)
+          if (isSelectionMode && selectedIndex == 5)
             IconButton(
               tooltip: 'Restore',
               icon: const Icon(Icons.restore_rounded),
@@ -2655,7 +2975,7 @@ class _GalleryScreenState extends State<GalleryScreen>
                   ? null
                   : restoreSelectionFromRecycleBin,
             ),
-          if (isSelectionMode && selectedIndex == 4)
+          if (isSelectionMode && selectedIndex == 5)
             IconButton(
               tooltip: 'Delete forever',
               icon: const Icon(Icons.delete_forever_rounded),
@@ -2663,7 +2983,7 @@ class _GalleryScreenState extends State<GalleryScreen>
                   ? null
                   : deleteSelectionForever,
             ),
-          if (selectedIndex == 4 && !isSelectionMode)
+          if (selectedIndex == 5 && !isSelectionMode)
             Padding(
               padding: const EdgeInsets.only(right: 14),
               child: Center(
@@ -2684,7 +3004,7 @@ class _GalleryScreenState extends State<GalleryScreen>
                 isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
               ),
               onPressed: () {
-                context.read<ThemeProvider>().toggleTheme();
+                context.read<ThemeProvider>().toggleTheme(context);
               },
             ),
         ],
@@ -2764,9 +3084,34 @@ class _GalleryScreenState extends State<GalleryScreen>
       ),
       bottomNavigationBar: SafeArea(
         minimum: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: buildBottomBar(context, isDark),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (audioPlayerService.currentMusic != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: MiniMusicPlayer(
+                  audioPlayerService: audioPlayerService,
+                  onTap: () {
+                    if (audioPlayerService.currentMusic != null) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => MusicPlayerScreen(
+                            music: audioPlayerService.currentMusic!,
+                            audioPlayerService: audioPlayerService,
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: buildBottomBar(context, isDark),
+            ),
+          ],
         ),
       ),
     );

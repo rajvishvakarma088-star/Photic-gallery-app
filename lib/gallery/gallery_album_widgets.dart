@@ -90,31 +90,38 @@ Widget buildFeaturedAlbumCard({
             ),
           ),
           Positioned(
-            left: 16,
-            right: 16,
-            bottom: 16,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  album.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
+            left: 12,
+            right: 12,
+            bottom: 12,
+            child: GlassContainer(
+              borderRadius: BorderRadius.circular(20),
+              blurSigma: 12,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    album.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${album.count} photos',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.86),
-                    fontWeight: FontWeight.w600,
+                  const SizedBox(height: 2),
+                  Text(
+                    '${album.count} items',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.8),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
@@ -133,7 +140,8 @@ Widget buildAlbumListTile({
     onTap: onTap,
     child: GlassContainer(
       borderRadius: BorderRadius.circular(26),
-      enableBlur: false,
+      enableBlur: true,
+      blurSigma: 8,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
@@ -165,7 +173,7 @@ Widget buildAlbumListTile({
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '${album.count} images',
+                    '${album.count} items',
                     style: TextStyle(
                       color: colorScheme.onSurface.withOpacity(0.68),
                       fontWeight: FontWeight.w600,
