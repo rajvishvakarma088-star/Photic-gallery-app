@@ -160,9 +160,15 @@ class MusicService {
     _currentLoadPage = 0;
   }
 
-  Future<bool> requestMusicPermission() async {
-    final PermissionState ps = await PhotoManager.requestPermissionExtend();
-    return ps.hasAccess;
+  Future<PermissionState> requestMusicPermission() async {
+    return PhotoManager.requestPermissionExtend(
+      requestOption: const PermissionRequestOption(
+        androidPermission: AndroidPermission(
+          type: RequestType.audio,
+          mediaLocation: false,
+        ),
+      ),
+    );
   }
 
   /// Find album art image in the same directory as the music file

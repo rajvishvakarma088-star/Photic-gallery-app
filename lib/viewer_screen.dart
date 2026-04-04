@@ -65,8 +65,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
   final Set<String> highQualityReadyAssetIds = {};
   Timer? thumbnailStripTimer;
   Timer? deferredNeighborWarmupTimer;
+  Timer? _swipeDebounceTimer;
   bool isInteractingWithStrip = false;
   bool _editCompleted = false;
+  bool _swipeJustHappened = false; // prevents tap-after-swipe chrome flash
   AssetEntity? _newAssetPostEdit;
 
   double detailsDrag = 0;
@@ -343,6 +345,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     thumbnailScrollController.dispose();
     currentIndexNotifier.dispose();
     verticalDragNotifier.dispose();
+    _swipeDebounceTimer?.cancel();
     upwardDragNotifier.dispose();
     providerCache.clear();
     stripProviderCache.clear();
@@ -350,6 +353,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     warmedViewerAssetIds.clear();
     super.dispose();
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -378,6 +382,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () {
+              // Ignore taps that are actually swipe-ends
+              if (_swipeJustHappened) return;
               if (showDetails) {
                 closeDetails();
               } else {
@@ -457,8 +463,20 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                       currentIndex = index;
                                       currentIndexNotifier.value = index;
                                       warmCurrentThenNeighbors(index);
+                                      // Swipe → show strip + restore chrome
                                       showThumbnailStripTemporarily();
+                                      if (!showViewerChrome) {
+                                        setState(() => showViewerChrome = true);
+                                      }
                                       syncThumbnailStrip();
+                                      // Debounce: ignore the tap that fires
+                                      // immediately after a swipe ends
+                                      _swipeJustHappened = true;
+                                      _swipeDebounceTimer?.cancel();
+                                      _swipeDebounceTimer = Timer(
+                                        const Duration(milliseconds: 350),
+                                        () => _swipeJustHappened = false,
+                                      );
                                     },
                                     loadingBuilder: (context, event) =>
                                         const SizedBox(),
@@ -962,15 +980,16 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   Future<void> _showRenameDialog() async {
-    final file = await _currentAsset.file;
-    final currentName = file == null
-        ? 'Unknown file'
-        : path.basename(file.path);
-    final controller = TextEditingController(text: currentName);
+    final asset = _currentAsset;
+    final file = await asset.file;
+    if (file == null || !mounted) return;
 
-    if (!mounted) return;
+    final currentName = path.basename(file.path);
+    final ext = path.extension(currentName);        // e.g. ".jpg"
+    final baseName = path.basenameWithoutExtension(currentName);
+    final nameCtrl = TextEditingController(text: baseName);
 
-    await showDialog<void>(
+    final confirmed = await showDialog<bool>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.24),
       builder: (dialogContext) {
@@ -995,29 +1014,56 @@ class _ViewerScreenState extends State<ViewerScreen> {
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 4),
                   Text(
-                    'Premium rename UI is ready, but safe gallery-file rename still needs native media-store handling in this app.',
+                    'A renamed copy will be saved. Extension "$ext" is kept.',
                     style: TextStyle(
-                      color: colorScheme.onSurface.withValues(alpha: 0.74),
+                      color: colorScheme.onSurface.withValues(alpha: 0.58),
+                      fontSize: 12,
                       height: 1.4,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   TextField(
-                    controller: controller,
-                    readOnly: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Current file name',
+                    controller: nameCtrl,
+                    autofocus: true,
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => Navigator.pop(dialogContext, true),
+                    decoration: InputDecoration(
+                      labelText: 'New name',
+                      hintText: baseName,
+                      suffixText: ext,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 18),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: FilledButton(
-                      onPressed: () => Navigator.pop(dialogContext),
-                      child: const Text('Close'),
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(dialogContext, false),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            side: BorderSide(
+                              color: Colors.white.withValues(alpha: 0.28),
+                            ),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(dialogContext, true),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Rename'),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1026,6 +1072,65 @@ class _ViewerScreenState extends State<ViewerScreen> {
         );
       },
     );
+
+    if (confirmed != true || !mounted) return;
+
+    final newBase = nameCtrl.text.trim();
+    if (newBase.isEmpty || newBase == baseName) return;
+
+    final newTitle = '$newBase$ext';
+    // Determine the MediaStore type: 1=image, 2=video, 3=audio
+    final assetTypeInt = asset.type == AssetType.video
+        ? 2
+        : asset.type == AssetType.audio
+        ? 3
+        : 1;
+
+    try {
+      _showViewerSnackBar('Renaming...');
+      // Pass asset ID directly — avoids unreliable DATA column query on Android 11+
+      await _renameChannel.invokeMethod('renameFile', {
+        'assetId': asset.id,        // MediaStore _ID
+        'assetType': assetTypeInt,  // 1=image, 2=video, 3=audio
+        'newName': newTitle,
+      });
+      if (!mounted) return;
+      _showViewerSnackBar('Renamed to "$newTitle" ✔');
+    } on PlatformException catch (e) {
+      if (mounted) _showViewerSnackBar('Rename failed: ${e.message}');
+    } catch (e) {
+      if (mounted) _showViewerSnackBar('Rename failed: $e');
+    }
+
+  }
+
+  // ── Rename + Wallpaper channels ──────────────────────────────────
+  static const _renameChannel   = MethodChannel('com.rajappppp/rename');
+  static const _wallpaperChannel = MethodChannel('com.rajappppp/wallpaper');
+
+  Future<void> _setWallpaper(int which) async {
+    final file = await _currentAsset.file;
+    if (file == null) {
+      _showViewerSnackBar('Image file not available');
+      return;
+    }
+    _showViewerSnackBar('Setting wallpaper...');
+    try {
+      await _wallpaperChannel.invokeMethod('setWallpaper', {
+        'path': file.path,
+        'which': which, // 1=home, 2=lock, 3=both
+      });
+      final label = which == 1
+          ? 'Home Screen'
+          : which == 2
+          ? 'Lock Screen'
+          : 'Home & Lock Screen';
+      if (mounted) _showViewerSnackBar('Wallpaper set ✔ ($label)');
+    } on PlatformException catch (e) {
+      if (mounted) _showViewerSnackBar('Failed: ${e.message}');
+    } catch (e) {
+      if (mounted) _showViewerSnackBar('Wallpaper failed');
+    }
   }
 
   Future<void> _showSetAsSheet(bool isDark) async {
@@ -1070,39 +1175,45 @@ class _ViewerScreenState extends State<ViewerScreen> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Choose where you want to use this image next.',
+                        'Choose where to use this image.',
                         style: TextStyle(color: color.withValues(alpha: 0.68)),
                       ),
                       const SizedBox(height: 14),
                       _buildMenuTile(
                         isDark: isDark,
                         icon: Icons.wallpaper_rounded,
-                        title: 'Home Screen',
-                        subtitle: 'Prepare this photo for wallpaper use',
+                        title: 'Home Screen Wallpaper',
+                        subtitle: 'Set this photo as your home screen',
                         onTap: () {
                           Navigator.pop(sheetContext);
-                          _showViewerSnackBar(
-                            'Set as wallpaper needs native Android integration next',
-                          );
+                          _setWallpaper(1);
                         },
                       ),
                       _buildMenuTile(
                         isDark: isDark,
                         icon: Icons.lock_rounded,
-                        title: 'Lock Screen',
-                        subtitle: 'Use this image on the lock screen',
+                        title: 'Lock Screen Wallpaper',
+                        subtitle: 'Set this photo as your lock screen',
                         onTap: () {
                           Navigator.pop(sheetContext);
-                          _showViewerSnackBar(
-                            'Lock-screen set as needs native Android integration next',
-                          );
+                          _setWallpaper(2);
                         },
                       ),
                       _buildMenuTile(
                         isDark: isDark,
-                        icon: Icons.person_rounded,
-                        title: 'Profile Photo',
-                        subtitle: 'Open this image in another app to continue',
+                        icon: Icons.phone_android_rounded,
+                        title: 'Home & Lock Screen',
+                        subtitle: 'Set as wallpaper everywhere',
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          _setWallpaper(3);
+                        },
+                      ),
+                      _buildMenuTile(
+                        isDark: isDark,
+                        icon: Icons.open_in_new_rounded,
+                        title: 'Open With Another App',
+                        subtitle: 'Use in contacts, social apps, etc.',
                         onTap: () async {
                           Navigator.pop(sheetContext);
                           await openWithAnotherApp();

@@ -28,80 +28,171 @@ class AlbumDetailScreen extends StatefulWidget {
 }
 
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
-  static const double pinchStepOutThreshold = 1.08;
-  static const double pinchStepInThreshold = 0.92;
+  // ── Pinch constants (exact copy of gallery_screen) ─────────────────────────
+  static const double pinchStepOutThreshold = 1.07;
+  static const double pinchStepInThreshold = 0.93;
   static const int pinchStepCooldownMs = 55;
+
   final GalleryService service = GalleryService();
   final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
-  final PageController mediaPageController = PageController();
-  final ScrollController photoScrollController = ScrollController();
-  final ScrollController videoScrollController = ScrollController();
-  final Map<String, AssetEntityImageProvider> thumbnailProviderCache = {};
+
+  // PageController drives the Photos / Videos tab swipe
+  final PageController _pageController = PageController();
+
+  // Each tab has its OWN dedicated scroll controller – passed explicitly to
+  // each grid so that there is never any ambiguity about which controller is
+  // attached to which list.
+  final ScrollController _photoScrollController = ScrollController();
+  final ScrollController _videoScrollController = ScrollController();
+
+  // Shared thumbnail cache keyed by  "${assetId}@${px}"
+  final Map<String, AssetEntityImageProvider> _thumbCache = {};
+
+  // Grid-tile GlobalKeys – prefixed with tab index to avoid duplicate-key
+  // errors when the same asset appears in both Photos and Videos tabs.
   final Map<String, GlobalKey> _gridTileKeys = {};
+
   final Set<String> selectedAssetIds = {};
+
   late List<AssetEntity> albumImages;
   List<AssetEntity> albumVideos = [];
+
   int albumGridCount = 3;
-  int selectedMediaTab = 0;
+  int selectedMediaTab = 0; // 0 = Photos, 1 = Videos
+
+  // ── Pinch state ────────────────────────────────────────────────────────────
   double _lastPinchScale = 1.0;
   double _pinchAccumulator = 1.0;
   int _activePointers = 0;
   DateTime _lastGridStepAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _pinchStepConsumed = false;
+
+  // ── Other state ────────────────────────────────────────────────────────────
   bool isRecycleActionInProgress = false;
+  bool isLoadingPhotos = false;
   bool isLoadingVideos = false;
+
+  // ── Drag-selection state ───────────────────────────────────────────────────
   bool? _dragSelectionTargetValue;
   final Set<String> _dragSelectionTouchedIds = {};
   Timer? _dragAutoScrollTimer;
   double _dragAutoScrollVelocity = 0;
   Offset? _lastDragGlobalPosition;
+
+  // ── Thumbnail warmup ───────────────────────────────────────────────────────
   Timer? _thumbnailWarmupTimer;
 
+  // ── Convenience getters ────────────────────────────────────────────────────
   bool get _isPinching => _activePointers >= 2;
   bool get isSelectionMode => selectedAssetIds.isNotEmpty;
   List<AssetEntity> get visibleAssets =>
       selectedMediaTab == 0 ? albumImages : albumVideos;
 
-  int get albumThumbPx {
-    return 180;
+  static const int _thumbPx = 180;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Lifecycle
+  // ══════════════════════════════════════════════════════════════════════════
+
+  @override
+  void initState() {
+    super.initState();
+    // Seed with the photos passed in so the grid appears instantly,
+    // then fetch ALL pages in the background (widget.images is capped at 120).
+    albumImages = List<AssetEntity>.from(widget.images);
+    _photoScrollController.addListener(_onPhotoScroll);
+    _videoScrollController.addListener(_onVideoScroll);
+    unawaited(_loadAllAlbumPhotos());
+    unawaited(_loadAllAlbumVideos());
   }
 
-  Route<T> buildCinematicRoute<T>(Widget page) {
-    return PageRouteBuilder<T>(
-      opaque: false,
-      transitionDuration: Duration.zero,
-      reverseTransitionDuration: Duration.zero,
-      pageBuilder: (context, animation, secondaryAnimation) => page,
-    );
+  void _onPhotoScroll() {
+    if (selectedMediaTab == 0) _scheduleThumbnailWarmup();
   }
 
-  Widget buildImage(AssetEntity asset) {
-    return buildImageWithSize(asset, albumThumbPx);
+  void _onVideoScroll() {
+    if (selectedMediaTab == 1) _scheduleThumbnailWarmup();
   }
 
-  void _toggleSelectAllInCurrentTab() {
-    final assets = visibleAssets;
-    if (assets.isEmpty || isRecycleActionInProgress) return;
-    final assetIds = assets.map((asset) => asset.id).toSet();
-    final allSelected = assetIds.every(selectedAssetIds.contains);
+  @override
+  void dispose() {
+    _thumbnailWarmupTimer?.cancel();
+    _dragAutoScrollTimer?.cancel();
+    _photoScrollController
+      ..removeListener(_onPhotoScroll)
+      ..dispose();
+    _videoScrollController
+      ..removeListener(_onVideoScroll)
+      ..dispose();
+    _pageController.dispose();
+    _gridTileKeys.clear();
+    super.dispose();
+  }
 
-    setState(() {
-      if (allSelected) {
-        selectedAssetIds.removeAll(assetIds);
-      } else {
-        selectedAssetIds.addAll(assetIds);
-      }
-      _gridTileKeys.clear();
+  // ══════════════════════════════════════════════════════════════════════════
+  // Thumbnail warmup (same logic as gallery_screen)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  void _scheduleThumbnailWarmup() {
+    if (!mounted) return;
+    _thumbnailWarmupTimer?.cancel();
+    _thumbnailWarmupTimer = Timer(const Duration(milliseconds: 100), () {
+      if (!mounted) return;
+      _warmVisibleThumbnailBand();
     });
   }
 
-  void _startDragSelection(AssetEntity asset) {
+  void _warmVisibleThumbnailBand() {
+    if (!mounted) return;
+    final controller =
+        selectedMediaTab == 0 ? _photoScrollController : _videoScrollController;
+    final assets = selectedMediaTab == 0 ? albumImages : albumVideos;
+    if (!controller.hasClients || assets.isEmpty) return;
+
+    final viewportWidth = MediaQuery.of(context).size.width;
+    // Approximate the grid padding (10 left + 10 right = 20) and spacing
+    const spacing = 6.0;
+    final contentWidth =
+        viewportWidth - 20 - (albumGridCount - 1) * spacing;
+    final tileExtent = (contentWidth / albumGridCount) + spacing;
+
+    final scrollOffset = controller.offset;
+    final viewportHeight = controller.position.viewportDimension;
+
+    final firstRow = (scrollOffset / tileExtent).floor();
+    final visibleRows = (viewportHeight / tileExtent).ceil() + 2;
+
+    final startIndex =
+        ((firstRow - 2) * albumGridCount).clamp(0, assets.length);
+    final endIndex =
+        ((firstRow + visibleRows + 4) * albumGridCount).clamp(0, assets.length);
+
+    for (int i = startIndex; i < endIndex; i++) {
+      final asset = assets[i];
+      final id = '${asset.id}@$_thumbPx';
+      if (!_thumbCache.containsKey(id)) {
+        final provider = AssetEntityImageProvider(
+          asset,
+          isOriginal: false,
+          thumbnailSize: const ThumbnailSize.square(_thumbPx),
+          thumbnailFormat: ThumbnailFormat.jpeg,
+        );
+        _thumbCache[id] = provider;
+        unawaited(precacheImage(provider, context));
+      }
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Drag selection
+  // ══════════════════════════════════════════════════════════════════════════
+
+  void _startDragSelection(AssetEntity asset, int tab) {
     if (isRecycleActionInProgress) return;
     _dragSelectionTargetValue = !selectedAssetIds.contains(asset.id);
     _dragSelectionTouchedIds
       ..clear()
       ..add(asset.id);
-
     setState(() {
       if (_dragSelectionTargetValue!) {
         selectedAssetIds.add(asset.id);
@@ -116,11 +207,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     if (targetValue == null || _dragSelectionTouchedIds.contains(asset.id)) {
       return;
     }
-
     _dragSelectionTouchedIds.add(asset.id);
     final isSelected = selectedAssetIds.contains(asset.id);
     if (isSelected == targetValue) return;
-
     setState(() {
       if (targetValue) {
         selectedAssetIds.add(asset.id);
@@ -130,28 +219,28 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     });
   }
 
-  ScrollController get _activeGridScrollController =>
-      selectedMediaTab == 0 ? photoScrollController : videoScrollController;
-
-  void _updateDragSelection(Offset globalPosition, List<AssetEntity> assets) {
+  void _updateDragSelection(
+    Offset globalPosition,
+    List<AssetEntity> assets,
+    int tab,
+  ) {
     _lastDragGlobalPosition = globalPosition;
-    final targetValue = _dragSelectionTargetValue;
-    if (targetValue == null) return;
+    if (_dragSelectionTargetValue == null) return;
 
     for (final asset in assets) {
-      final key = _gridTileKeys[asset.id];
-      final context = key?.currentContext;
-      if (context == null) continue;
-      final box = context.findRenderObject() as RenderBox?;
+      final key = _gridTileKeys['t${tab}_${asset.id}'];
+      final ctx = key?.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
       if (box == null || !box.hasSize) continue;
       final rect = box.localToGlobal(Offset.zero) & box.size;
-      if (rect.contains(globalPosition)) {
+      if (rect.inflate(4).contains(globalPosition)) {
         _applyDragSelection(asset);
         break;
       }
     }
 
-    _updateDragAutoScroll(globalPosition, assets);
+    _updateDragAutoScroll(globalPosition, assets, tab);
   }
 
   void _endDragSelection() {
@@ -163,13 +252,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     _dragAutoScrollTimer = null;
   }
 
-  void _updateDragAutoScroll(Offset globalPosition, List<AssetEntity> assets) {
-    final controller = _activeGridScrollController;
+  void _updateDragAutoScroll(
+    Offset globalPosition,
+    List<AssetEntity> assets,
+    int tab,
+  ) {
+    final controller =
+        tab == 0 ? _photoScrollController : _videoScrollController;
     if (!controller.hasClients) return;
 
-    final scrollContext = controller.position.context.notificationContext;
-    if (scrollContext == null) return;
-    final box = scrollContext.findRenderObject() as RenderBox?;
+    final scrollCtx = controller.position.context.notificationContext;
+    if (scrollCtx == null) return;
+    final box = scrollCtx.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
 
     final rect = box.localToGlobal(Offset.zero) & box.size;
@@ -196,339 +290,46 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     }
 
     _dragAutoScrollVelocity = velocity;
-    _dragAutoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (
-      _,
-    ) {
-      final dragPosition = _lastDragGlobalPosition;
+    _dragAutoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+      final dragPos = _lastDragGlobalPosition;
+      final ctrl = tab == 0 ? _photoScrollController : _videoScrollController;
       if (_dragSelectionTargetValue == null ||
-          !_activeGridScrollController.hasClients ||
-          dragPosition == null) {
+          !ctrl.hasClients ||
+          dragPos == null) {
         _dragAutoScrollTimer?.cancel();
         _dragAutoScrollTimer = null;
         return;
       }
 
-      final position = _activeGridScrollController.position;
-      final nextOffset = (position.pixels + _dragAutoScrollVelocity).clamp(
-        position.minScrollExtent,
-        position.maxScrollExtent,
+      final pos = ctrl.position;
+      final nextOffset = (pos.pixels + _dragAutoScrollVelocity).clamp(
+        pos.minScrollExtent,
+        pos.maxScrollExtent,
       );
-
-      if ((nextOffset - position.pixels).abs() < 0.1) return;
-      _activeGridScrollController.jumpTo(nextOffset);
-      _updateDragSelection(dragPosition, assets);
+      if ((nextOffset - pos.pixels).abs() < 0.1) return;
+      ctrl.jumpTo(nextOffset);
+      _updateDragSelection(dragPos, assets, tab);
     });
   }
 
-  @override
-  void initState() {
-    super.initState();
-    albumImages = List<AssetEntity>.from(widget.images);
-    photoScrollController.addListener(_onGridScroll);
-    videoScrollController.addListener(_onGridScroll);
-    unawaited(_loadAlbumVideos());
-  }
+  // ══════════════════════════════════════════════════════════════════════════
+  // Route helper
+  // ══════════════════════════════════════════════════════════════════════════
 
-  void _onGridScroll() {
-    _scheduleThumbnailWarmup();
-  }
-
-  void _scheduleThumbnailWarmup() {
-    if (!mounted) return;
-    _thumbnailWarmupTimer?.cancel();
-    _thumbnailWarmupTimer = Timer(const Duration(milliseconds: 120), () {
-      if (!mounted) return;
-      _warmVisibleThumbnailBand();
-    });
-  }
-
-  void _warmVisibleThumbnailBand() {
-    if (!mounted) return;
-    final controller =
-        selectedMediaTab == 0 ? photoScrollController : videoScrollController;
-    final assets = selectedMediaTab == 0 ? albumImages : albumVideos;
-    if (!controller.hasClients || assets.isEmpty) return;
-
-    final viewportWidth = MediaQuery.of(context).size.width;
-    const gridHorizontalPadding = 20.0;
-    const spacing = 6.0;
-    final contentWidth =
-        viewportWidth - gridHorizontalPadding - (albumGridCount - 1) * spacing;
-    final tileExtent = (contentWidth / albumGridCount) + spacing;
-
-    final scrollOffset = controller.offset;
-    final viewportHeight = controller.position.viewportDimension;
-
-    final firstRow = (scrollOffset / tileExtent).floor();
-    final visibleRows = (viewportHeight / tileExtent).ceil() + 2;
-
-    final startIndex = (firstRow * albumGridCount).clamp(0, assets.length);
-    final endIndex = ((firstRow + visibleRows + 4) * albumGridCount)
-        .clamp(0, assets.length);
-
-    for (int i = startIndex; i < endIndex; i++) {
-      final asset = assets[i];
-      final id = '${asset.id}@$albumThumbPx';
-      if (!thumbnailProviderCache.containsKey(id)) {
-        final provider = AssetEntityImageProvider(
-          asset,
-          isOriginal: false,
-          thumbnailSize: ThumbnailSize.square(albumThumbPx),
-          thumbnailFormat: ThumbnailFormat.jpeg,
-        );
-        thumbnailProviderCache[id] = provider;
-        unawaited(precacheImage(provider, context));
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _thumbnailWarmupTimer?.cancel();
-    _dragAutoScrollTimer?.cancel();
-    photoScrollController.removeListener(_onGridScroll);
-    videoScrollController.removeListener(_onGridScroll);
-    _gridTileKeys.clear();
-    photoScrollController.dispose();
-    videoScrollController.dispose();
-    mediaPageController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final themeProvider = context.watch<ThemeProvider>();
-    final isDark = themeProvider.isDark(context);
-    final topBarColor = isDark
-        ? const Color(0xFF120C24)
-        : const Color(0xFFF1E8FF);
-
-    final overlayStyle = isDark
-        ? SystemUiOverlayStyle.light
-        : SystemUiOverlayStyle.dark;
-
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        leading: isSelectionMode
-            ? IconButton(
-                tooltip: 'Close selection',
-                icon: const Icon(Icons.close_rounded),
-                onPressed: () {
-                  setState(() {
-                    selectedAssetIds.clear();
-                  });
-                },
-              )
-            : null,
-        title: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 360),
-          transitionBuilder: (child, animation) {
-            return FadeTransition(
-              opacity: animation,
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0, 0.15),
-                  end: Offset.zero,
-                ).animate(animation),
-                child: child,
-              ),
-            );
-          },
-          child: Text(
-            isSelectionMode
-                ? '${selectedAssetIds.length} selected'
-                : widget.title,
-            key: ValueKey('${widget.title}-${selectedAssetIds.length}'),
-          ),
-        ),
-        backgroundColor: topBarColor,
-        surfaceTintColor: Colors.transparent,
-        systemOverlayStyle: overlayStyle.copyWith(
-          statusBarColor: topBarColor,
-          statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
-        ),
-        actions: [
-          if (isSelectionMode)
-            IconButton(
-              tooltip:
-                  visibleAssets.isNotEmpty &&
-                      visibleAssets.every(
-                        (asset) => selectedAssetIds.contains(asset.id),
-                      )
-                  ? 'Deselect all'
-                  : 'Select all',
-              icon: Icon(
-                visibleAssets.isNotEmpty &&
-                        visibleAssets.every(
-                          (asset) => selectedAssetIds.contains(asset.id),
-                        )
-                    ? Icons.remove_done_rounded
-                    : Icons.select_all_rounded,
-              ),
-              onPressed: _toggleSelectAllInCurrentTab,
-            ),
-          if (isSelectionMode)
-            IconButton(
-              tooltip: 'Move to recycle bin',
-              icon: const Icon(Icons.delete_rounded),
-              onPressed: isRecycleActionInProgress
-                  ? null
-                  : _moveSelectionToRecycleBin,
-            ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: isDark
-                    ? const [
-                        Color(0xFF120C24),
-                        Color(0xFF1E163A),
-                        Color(0xFF2C1F52),
-                      ]
-                    : const [
-                        Color(0xFFF0E5FF),
-                        Color(0xFFE4D3FF),
-                        Color(0xFFD5BDFF),
-                      ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
-          ),
-          Positioned(
-            top: -70,
-            right: -30,
-            child: IgnorePointer(
-              child: Container(
-                width: 210,
-                height: 210,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(
-                    0xFFA855F7,
-                  ).withOpacity(isDark ? 0.18 : 0.24),
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 8, 10, 18),
-            child: GlassContainer(
-              borderRadius: BorderRadius.circular(30),
-              child: Listener(
-                onPointerDown: (_) {
-                  final wasPinching = _isPinching;
-                  _activePointers++;
-                  if (!wasPinching && _isPinching) {
-                    setState(() {});
-                  }
-                },
-                onPointerUp: (_) {
-                  final wasPinching = _isPinching;
-                  _activePointers = (_activePointers - 1).clamp(0, 20);
-                  if (wasPinching && !_isPinching) {
-                    setState(() {});
-                  }
-                },
-                onPointerCancel: (_) {
-                  final wasPinching = _isPinching;
-                  _activePointers = (_activePointers - 1).clamp(0, 20);
-                  if (wasPinching && !_isPinching) {
-                    setState(() {});
-                  }
-                },
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onScaleStart: (details) {
-                    _lastPinchScale = 1.0;
-                    _pinchAccumulator = 1.0;
-                    _pinchStepConsumed = false;
-                  },
-                  onScaleUpdate: (details) {
-                    if (_pinchStepConsumed) return;
-                    if (!_isPinching) {
-                      _lastPinchScale = details.scale;
-                      return;
-                    }
-
-                    final factor = details.scale / _lastPinchScale;
-                    _lastPinchScale = details.scale;
-                    if (!factor.isFinite || factor <= 0) return;
-
-                    _pinchAccumulator *= factor;
-                    int nextCount = albumGridCount;
-                    var updatedAccumulator = _pinchAccumulator;
-
-                    if (updatedAccumulator >= pinchStepOutThreshold &&
-                        nextCount > 2) {
-                      nextCount--;
-                      updatedAccumulator /= pinchStepOutThreshold;
-                    } else if (updatedAccumulator <= pinchStepInThreshold &&
-                        nextCount < 6) {
-                      nextCount++;
-                      updatedAccumulator /= pinchStepInThreshold;
-                    }
-
-                    _pinchAccumulator = updatedAccumulator
-                        .clamp(0.75, 1.25)
-                        .toDouble();
-                    if (nextCount == albumGridCount) return;
-
-                    final now = DateTime.now();
-                    if (now.difference(_lastGridStepAt).inMilliseconds <
-                        pinchStepCooldownMs) {
-                      return;
-                    }
-
-                    setState(() {
-                      albumGridCount = nextCount;
-                      _lastGridStepAt = now;
-                    });
-                    _pinchStepConsumed = true;
-                  },
-                  onScaleEnd: (details) {
-                    _lastPinchScale = 1.0;
-                    _pinchAccumulator = 1.0;
-                    _pinchStepConsumed = false;
-                  },
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
-                        child: _buildMediaToggle(isDark),
-                      ),
-                      Expanded(
-                        child: PageView(
-                          controller: mediaPageController,
-                          onPageChanged: (index) {
-                            setState(() {
-                              selectedMediaTab = index;
-                              selectedAssetIds.clear();
-                              _gridTileKeys.clear();
-                            });
-                          },
-                          children: [
-                            _buildAssetGrid(albumImages),
-                            _buildAssetGrid(albumVideos),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+  Route<T> _cinematicRoute<T>(Widget page) {
+    return PageRouteBuilder<T>(
+      opaque: false,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+      pageBuilder: (_, __, ___) => page,
     );
   }
 
-  Widget buildImageWithSize(AssetEntity asset, int size) {
+  // ══════════════════════════════════════════════════════════════════════════
+  // Image building (same pattern as gallery_screen.buildImage)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildThumb(AssetEntity asset, [int size = _thumbPx]) {
     final id = '${asset.id}@$size';
     final colorScheme = Theme.of(context).colorScheme;
     final placeholder = DecoratedBox(
@@ -548,7 +349,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       return placeholder;
     }
 
-    final provider = thumbnailProviderCache.putIfAbsent(
+    final provider = _thumbCache.putIfAbsent(
       id,
       () => AssetEntityImageProvider(
         asset,
@@ -563,27 +364,305 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       fit: BoxFit.cover,
       gaplessPlayback: true,
       filterQuality: FilterQuality.none,
-      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-        if (wasSynchronouslyLoaded || frame != null) {
-          return child;
-        }
+      frameBuilder: (_, child, frame, sync) {
+        if (sync || frame != null) return child;
         return placeholder;
       },
-      errorBuilder: (context, error, stackTrace) => placeholder,
+      errorBuilder: (_, __, ___) => placeholder,
     );
   }
 
-  Widget _buildAssetGrid(List<AssetEntity> assets) {
-    return GridView.builder(
-      key: ValueKey(
-        'album-grid-$albumGridCount-$selectedMediaTab-${assets.length}',
+  // ══════════════════════════════════════════════════════════════════════════
+  // Build
+  // ══════════════════════════════════════════════════════════════════════════
+
+  @override
+  Widget build(BuildContext context) {
+    final themeProvider = context.watch<ThemeProvider>();
+    final isDark = themeProvider.isDark(context);
+    final topBarColor =
+        isDark ? const Color(0xFF120C24) : const Color(0xFFF1E8FF);
+    final overlayStyle =
+        isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark;
+
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        leading: isSelectionMode
+            ? IconButton(
+                tooltip: 'Close selection',
+                icon: const Icon(Icons.close_rounded),
+                onPressed: () => setState(() => selectedAssetIds.clear()),
+              )
+            : null,
+        title: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 360),
+          transitionBuilder: (child, animation) => FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.15),
+                end: Offset.zero,
+              ).animate(animation),
+              child: child,
+            ),
+          ),
+          child: Text(
+            isSelectionMode
+                ? '${selectedAssetIds.length} selected'
+                : widget.title,
+            key: ValueKey('${widget.title}-${selectedAssetIds.length}'),
+          ),
+        ),
+        backgroundColor: topBarColor,
+        surfaceTintColor: Colors.transparent,
+        systemOverlayStyle: overlayStyle.copyWith(
+          statusBarColor: topBarColor,
+          statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+        ),
+        actions: [
+          if (isSelectionMode)
+            IconButton(
+              tooltip: visibleAssets.isNotEmpty &&
+                      visibleAssets
+                          .every((a) => selectedAssetIds.contains(a.id))
+                  ? 'Deselect all'
+                  : 'Select all',
+              icon: Icon(
+                visibleAssets.isNotEmpty &&
+                        visibleAssets
+                            .every((a) => selectedAssetIds.contains(a.id))
+                    ? Icons.remove_done_rounded
+                    : Icons.select_all_rounded,
+              ),
+              onPressed: _toggleSelectAll,
+            ),
+          if (isSelectionMode)
+            IconButton(
+              tooltip: 'Move to recycle bin',
+              icon: const Icon(Icons.delete_rounded),
+              onPressed: isRecycleActionInProgress ? null : _moveToRecycleBin,
+            ),
+        ],
       ),
-      controller: selectedMediaTab == 0
-          ? photoScrollController
-          : videoScrollController,
+      body: Stack(
+        children: [
+          // Background gradient
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: isDark
+                    ? const [
+                        Color(0xFF120C24),
+                        Color(0xFF1E163A),
+                        Color(0xFF2C1F52),
+                      ]
+                    : const [
+                        Color(0xFFF0E5FF),
+                        Color(0xFFE4D3FF),
+                        Color(0xFFD5BDFF),
+                      ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+          ),
+          // Decorative orb
+          Positioned(
+            top: -70,
+            right: -30,
+            child: IgnorePointer(
+              child: Container(
+                width: 210,
+                height: 210,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFA855F7)
+                      .withOpacity(isDark ? 0.18 : 0.24),
+                ),
+              ),
+            ),
+          ),
+          // Main content card
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 18),
+            child: GlassContainer(
+              borderRadius: BorderRadius.circular(30),
+              child: _buildPinchWrapper(isDark),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Pinch wrapper – exact copy of gallery_screen's buildGridView Listener +
+  // GestureDetector, but scoped to the album.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildPinchWrapper(bool isDark) {
+    return Listener(
+      onPointerDown: (_) {
+        final was = _isPinching;
+        _activePointers++;
+        if (!was && _isPinching) setState(() {});
+      },
+      onPointerUp: (_) {
+        final was = _isPinching;
+        _activePointers = (_activePointers - 1).clamp(0, 20);
+        if (was && !_isPinching) setState(() {});
+      },
+      onPointerCancel: (_) {
+        final was = _isPinching;
+        _activePointers = (_activePointers - 1).clamp(0, 20);
+        if (was && !_isPinching) setState(() {});
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onScaleStart: (_) {
+          _lastPinchScale = 1.0;
+          _pinchAccumulator = 1.0;
+          _pinchStepConsumed = false;
+        },
+        onScaleUpdate: (details) {
+          if (_pinchStepConsumed) return;
+          if (!_isPinching) {
+            _lastPinchScale = details.scale;
+            return;
+          }
+
+          final factor = details.scale / _lastPinchScale;
+          _lastPinchScale = details.scale;
+          if (!factor.isFinite || factor <= 0) return;
+
+          _pinchAccumulator *= factor;
+          int nextCount = albumGridCount;
+          var acc = _pinchAccumulator;
+
+          if (acc >= pinchStepOutThreshold && nextCount > 2) {
+            nextCount--;
+            acc /= pinchStepOutThreshold;
+          } else if (acc <= pinchStepInThreshold && nextCount < 6) {
+            nextCount++;
+            acc /= pinchStepInThreshold;
+          }
+
+          _pinchAccumulator = acc.clamp(0.75, 1.25).toDouble();
+          if (nextCount == albumGridCount) return;
+
+          final now = DateTime.now();
+          if (now.difference(_lastGridStepAt).inMilliseconds <
+              pinchStepCooldownMs) return;
+
+          setState(() {
+            albumGridCount = nextCount;
+            _lastGridStepAt = now;
+          });
+          // Schedule warmup after the new grid has been laid out
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _scheduleThumbnailWarmup();
+          });
+          _pinchStepConsumed = true;
+        },
+        onScaleEnd: (_) {
+          _lastPinchScale = 1.0;
+          _pinchAccumulator = 1.0;
+          _pinchStepConsumed = false;
+        },
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+              child: _buildTabToggle(isDark),
+            ),
+            Expanded(child: _buildTabPages()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Tab pages – a simple PageView. Each page owns the correct scroll controller
+  // and is keyed by its own tab index so Flutter never confuses them.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildTabPages() {
+    return PageView(
+      controller: _pageController,
+      physics: _isPinching
+          ? const NeverScrollableScrollPhysics()
+          : const BouncingScrollPhysics(),
+      onPageChanged: (index) {
+        setState(() {
+          selectedMediaTab = index;
+          // Clear selection when switching tabs but keep grid size
+          selectedAssetIds.clear();
+          _gridTileKeys.clear();
+        });
+        // Warm up thumbnails for the newly revealed tab
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _scheduleThumbnailWarmup();
+        });
+      },
+      children: [
+        // Page 0 – Photos (always uses _photoScrollController)
+        _buildGrid(
+          assets: albumImages,
+          scrollController: _photoScrollController,
+          tab: 0,
+        ),
+        // Page 1 – Videos (always uses _videoScrollController)
+        _buildGrid(
+          assets: albumVideos,
+          scrollController: _videoScrollController,
+          tab: 1,
+          isLoading: isLoadingVideos,
+        ),
+      ],
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Grid – receives its scroll controller and tab index explicitly.
+  // The grid itself never reads `selectedMediaTab` so there is no stale-state
+  // risk when both pages are alive inside PageView.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildGrid({
+    required List<AssetEntity> assets,
+    required ScrollController scrollController,
+    required int tab,
+    bool isLoading = false,
+  }) {
+    if (isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (assets.isEmpty) {
+      return Center(
+        child: Text(
+          tab == 0 ? 'No photos in this album' : 'No videos in this album',
+          style: TextStyle(
+            color: Theme.of(context)
+                .colorScheme
+                .onSurface
+                .withValues(alpha: 0.7),
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    return GridView.builder(
+      // No ValueKey here – we never want the grid to be recreated during a
+      // pinch, which would reset scroll position and cause jank.
+      controller: scrollController,
       padding: const EdgeInsets.all(10),
       cacheExtent: 1500,
-      itemCount: assets.length,
       physics: _isPinching
           ? const NeverScrollableScrollPhysics()
           : const BouncingScrollPhysics(),
@@ -593,161 +672,155 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         crossAxisSpacing: 6,
         childAspectRatio: 1,
       ),
+      itemCount: assets.length,
       itemBuilder: (context, index) {
         final asset = assets[index];
-        final tileKey = _gridTileKeys.putIfAbsent(asset.id, GlobalKey.new);
-        final ImageProvider<Object> previewProvider = thumbnailProviderCache
-            .putIfAbsent(
-              '${asset.id}@$albumThumbPx',
-              () => AssetEntityImageProvider(
-                asset,
-                isOriginal: false,
-                thumbnailSize: ThumbnailSize.square(albumThumbPx),
-                thumbnailFormat: ThumbnailFormat.jpeg,
-              ),
-            );
-        return _AlbumReveal(
-          order: index,
-          child: RepaintBoundary(
-            child: GestureDetector(
-              key: tileKey,
-              onLongPress: () {},
-              onLongPressStart: (_) {
-                _startDragSelection(asset);
-              },
-              onLongPressMoveUpdate: (details) {
-                _updateDragSelection(details.globalPosition, assets);
-              },
-              onLongPressEnd: (_) {
-                _endDragSelection();
-              },
-              onTap: () async {
-                if (isSelectionMode) {
+        // Tab-prefixed key avoids GlobalKey conflicts when the same asset
+        // appears in both Photos and Videos tabs.
+        final tileKey =
+            _gridTileKeys.putIfAbsent('t${tab}_${asset.id}', GlobalKey.new);
+
+        final previewProvider = _thumbCache.putIfAbsent(
+          '${asset.id}@$_thumbPx',
+          () => AssetEntityImageProvider(
+            asset,
+            isOriginal: false,
+            thumbnailSize: const ThumbnailSize.square(_thumbPx),
+            thumbnailFormat: ThumbnailFormat.jpeg,
+          ),
+        );
+
+        return RepaintBoundary(
+          child: GestureDetector(
+            key: tileKey,
+            onLongPress: () {},
+            onLongPressStart: (_) => _startDragSelection(asset, tab),
+            onLongPressMoveUpdate: (d) =>
+                _updateDragSelection(d.globalPosition, assets, tab),
+            onLongPressEnd: (_) => _endDragSelection(),
+            onTap: () async {
+              if (isSelectionMode) {
+                setState(() {
+                  if (!selectedAssetIds.add(asset.id)) {
+                    selectedAssetIds.remove(asset.id);
+                  }
+                });
+                return;
+              }
+
+              if (asset.type == AssetType.video || tab == 1) {
+                // ── Video viewer ──────────────────────────────────────────
+                final videos =
+                    tab == 1 ? albumVideos : [asset];
+                final videoIndex = videos.indexWhere((e) => e.id == asset.id);
+                final viewerAction = await Navigator.push<String>(
+                  context,
+                  _cinematicRoute(
+                    VideoViewerScreen(
+                      videos: videos,
+                      initialIndex: videoIndex < 0 ? 0 : videoIndex,
+                    ),
+                  ),
+                );
+                if ((viewerAction == 'recycle' || viewerAction == 'vault') &&
+                    mounted) {
                   setState(() {
-                    if (!selectedAssetIds.add(asset.id)) {
-                      selectedAssetIds.remove(asset.id);
-                    }
+                    albumVideos = albumVideos
+                        .where((v) => v.id != asset.id)
+                        .toList(growable: false);
                   });
+                }
+              } else {
+                // ── Photo viewer ──────────────────────────────────────────
+                final openingProvider =
+                    ViewerScreen.openingImageProvider(context, asset);
+                unawaited(precacheImage(openingProvider, context));
+                final dynamic result = await Navigator.push<dynamic>(
+                  context,
+                  _cinematicRoute(
+                    ViewerScreen(
+                      images: albumImages,
+                      index: index,
+                      initialPreviewProvider: previewProvider,
+                      initialViewerProvider: openingProvider,
+                    ),
+                  ),
+                );
+
+                if (result == null || !mounted) return;
+
+                if (result is AssetEntity) {
+                  setState(() => albumImages.insert(0, result));
                   return;
                 }
 
-                if (asset.type == AssetType.video) {
-                  final viewerAction = await Navigator.push<String>(
-                    context,
-                    buildCinematicRoute(
-                      VideoViewerScreen(
-                        videos: albumVideos,
-                        initialIndex: index,
-                      ),
-                    ),
-                  );
-                  if ((viewerAction != 'recycle' && viewerAction != 'vault') ||
-                      !mounted) {
-                    return;
-                  }
-                  setState(() {
-                    albumVideos = albumVideos
-                        .where((item) => item.id != asset.id)
-                        .toList(growable: false);
-                  });
-                } else {
-                  final openingProvider = ViewerScreen.openingImageProvider(
-                    context,
-                    asset,
-                  );
-                  unawaited(precacheImage(openingProvider, context));
-                  final dynamic result = await Navigator.push<dynamic>(
-                    context,
-                    buildCinematicRoute(
-                      ViewerScreen(
-                        images: albumImages,
-                        index: index,
-                        initialPreviewProvider: previewProvider,
-                        initialViewerProvider: openingProvider,
-                      ),
-                    ),
-                  );
-                  
-                  if (result == null || !mounted) return;
-                  
-                  if (result is AssetEntity) {
-                    setState(() {
-                      albumImages.insert(0, result);
-                    });
-                    return;
-                  }
-
-                  final String viewerAction = result is String ? result : '';
-                  if (viewerAction != 'recycle' && viewerAction != 'vault') {
-                    return;
-                  }
+                final action = result is String ? result : '';
+                if (action == 'recycle' || action == 'vault') {
                   setState(() {
                     albumImages = albumImages
-                        .where((item) => item.id != asset.id)
+                        .where((img) => img.id != asset.id)
                         .toList(growable: false);
                   });
+                  if (mounted) {
+                    ScaffoldMessenger.of(context)
+                      ..hideCurrentSnackBar()
+                      ..showSnackBar(
+                        const SnackBar(
+                          content: Text('Removed from album'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                  }
                 }
-
-                ScaffoldMessenger.of(this.context)
-                  ..hideCurrentSnackBar()
-                  ..showSnackBar(
-                    const SnackBar(
-                      content: Text('Removed from gallery'),
-                      behavior: SnackBarBehavior.floating,
+              }
+            },
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Hero(
+                    tag: asset.id,
+                    child: _buildThumb(asset),
+                  ),
+                  // Video badge
+                  if (asset.type == AssetType.video || tab == 1)
+                    Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 14,
+                        ),
+                      ),
                     ),
-                  );
-              },
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(18),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Hero(
-                      tag: asset.id,
-                      child: buildImageWithSize(asset, albumThumbPx),
-                    ),
-                    if (asset.type == AssetType.video)
-                      Positioned(
-                        bottom: 8,
-                        right: 8,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.6),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(
-                            Icons.play_arrow_rounded,
-                            color: Colors.white,
-                            size: 14,
+                  // Selection overlay
+                  if (selectedAssetIds.contains(asset.id))
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.28),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: const Align(
+                          alignment: Alignment.topLeft,
+                          child: Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Icon(Icons.check_circle, color: Colors.white),
                           ),
                         ),
                       ),
-                    if (selectedAssetIds.contains(asset.id))
-                      Positioned.fill(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.28),
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: Colors.white, width: 2),
-                          ),
-                          child: const Align(
-                            alignment: Alignment.topLeft,
-                            child: Padding(
-                              padding: EdgeInsets.all(8),
-                              child: Icon(
-                                Icons.check_circle,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
+                    ),
+                ],
               ),
             ),
           ),
@@ -756,7 +829,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     );
   }
 
-  Widget _buildMediaToggle(bool isDark) {
+  // ══════════════════════════════════════════════════════════════════════════
+  // Tab toggle (Photos / Videos pill)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  Widget _buildTabToggle(bool isDark) {
     final textColor = isDark ? Colors.white : const Color(0xFF211A33);
     return GlassContainer(
       borderRadius: BorderRadius.circular(24),
@@ -766,14 +843,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         child: Row(
           children: [
             Expanded(
-              child: _buildMediaTabButton(
+              child: _tabButton(
                 label: 'Photos',
                 count: albumImages.length,
                 selected: selectedMediaTab == 0,
                 textColor: textColor,
                 onTap: () {
                   if (selectedMediaTab == 0) return;
-                  mediaPageController.animateToPage(
+                  _pageController.animateToPage(
                     0,
                     duration: const Duration(milliseconds: 240),
                     curve: Curves.easeOutCubic,
@@ -783,7 +860,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             ),
             const SizedBox(width: 6),
             Expanded(
-              child: _buildMediaTabButton(
+              child: _tabButton(
                 label: 'Videos',
                 count: albumVideos.length,
                 selected: selectedMediaTab == 1,
@@ -791,7 +868,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 loading: isLoadingVideos,
                 onTap: () {
                   if (selectedMediaTab == 1) return;
-                  mediaPageController.animateToPage(
+                  _pageController.animateToPage(
                     1,
                     duration: const Duration(milliseconds: 240),
                     curve: Curves.easeOutCubic,
@@ -805,7 +882,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     );
   }
 
-  Widget _buildMediaTabButton({
+  Widget _tabButton({
     required String label,
     required int count,
     required bool selected,
@@ -870,27 +947,108 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     );
   }
 
-  Future<void> _loadAlbumVideos() async {
-    setState(() {
-      isLoadingVideos = true;
-    });
+  // ══════════════════════════════════════════════════════════════════════════
+  // Data loading
+  // ══════════════════════════════════════════════════════════════════════════
 
-    final videos = await service.fetchAlbumVideos(widget.album);
+  /// Loads every photo page from the album (replaces the 120-item seed).
+  Future<void> _loadAllAlbumPhotos() async {
+    // Don't show a spinner — we already have the seed from widget.images
+    final all = await service.fetchAllAlbumImages(widget.album);
     if (!mounted) return;
+    setState(() {
+      albumImages = all;
+    });
+    // Warm thumbnails for the newly loaded items
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scheduleThumbnailWarmup();
+    });
+  }
 
+  /// Loads every video page from the album.
+  Future<void> _loadAllAlbumVideos() async {
+    setState(() => isLoadingVideos = true);
+    final videos = await service.fetchAllAlbumVideos(widget.album);
+    if (!mounted) return;
     setState(() {
       albumVideos = videos;
       isLoadingVideos = false;
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (selectedMediaTab == 1) _scheduleThumbnailWarmup();
+    });
   }
 
-  Future<bool> _confirmMoveToRecycleBin(int count) async {
+  // ══════════════════════════════════════════════════════════════════════════
+  // Selection helpers
+  // ══════════════════════════════════════════════════════════════════════════
+
+  void _toggleSelectAll() {
+    final assets = visibleAssets;
+    if (assets.isEmpty || isRecycleActionInProgress) return;
+    final ids = assets.map((a) => a.id).toSet();
+    final allSelected = ids.every(selectedAssetIds.contains);
+    setState(() {
+      if (allSelected) {
+        selectedAssetIds.removeAll(ids);
+      } else {
+        selectedAssetIds.addAll(ids);
+      }
+      _gridTileKeys.clear();
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Recycle bin
+  // ══════════════════════════════════════════════════════════════════════════
+
+  Future<void> _moveToRecycleBin() async {
+    final ids = selectedAssetIds.toSet();
+    if (ids.isEmpty || isRecycleActionInProgress) return;
+
+    final shouldMove = await _confirmRecycle(ids.length);
+    if (!shouldMove || !mounted) return;
+
+    setState(() => isRecycleActionInProgress = true);
+    try {
+      await recycleBinDatabase.addAssets(
+        albumImages.where((a) => ids.contains(a.id)).toList(),
+      );
+      if (!mounted) return;
+      setState(() {
+        albumImages = albumImages
+            .where((a) => !ids.contains(a.id))
+            .toList(growable: false);
+        albumVideos = albumVideos
+            .where((a) => !ids.contains(a.id))
+            .toList(growable: false);
+        selectedAssetIds.clear();
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                  '${ids.length} item${ids.length == 1 ? '' : 's'} moved to recycle bin'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+      }
+    } finally {
+      if (mounted) setState(() => isRecycleActionInProgress = false);
+    }
+  }
+
+  Future<bool> _confirmRecycle(int count) async {
     final result = await showDialog<bool>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.18),
-      builder: (dialogContext) {
-        final colorScheme = Theme.of(dialogContext).colorScheme;
-        final isDark = Theme.of(dialogContext).brightness == Brightness.dark;
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        final dark = Theme.of(ctx).brightness == Brightness.dark;
         return Dialog(
           backgroundColor: Colors.transparent,
           insetPadding: const EdgeInsets.symmetric(horizontal: 24),
@@ -910,21 +1068,18 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         height: 52,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: Colors.white.withValues(
-                            alpha: isDark ? 0.12 : 0.32,
-                          ),
+                          color: Colors.white
+                              .withValues(alpha: dark ? 0.12 : 0.32),
                         ),
-                        child: Icon(
-                          Icons.delete_outline_rounded,
-                          color: colorScheme.onSurface,
-                        ),
+                        child: Icon(Icons.delete_outline_rounded,
+                            color: cs.onSurface),
                       ),
                       const SizedBox(width: 14),
                       Expanded(
                         child: Text(
                           'Move To Recycle Bin?',
                           style: TextStyle(
-                            color: colorScheme.onSurface,
+                            color: cs.onSurface,
                             fontSize: 20,
                             fontWeight: FontWeight.w800,
                           ),
@@ -938,7 +1093,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         ? 'This item will be moved to the recycle bin and can be restored later.'
                         : '$count items will be moved to the recycle bin and can be restored later.',
                     style: TextStyle(
-                      color: colorScheme.onSurface.withValues(alpha: 0.76),
+                      color: cs.onSurface.withValues(alpha: 0.76),
                       height: 1.42,
                     ),
                   ),
@@ -947,12 +1102,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton(
-                          onPressed: () => Navigator.pop(dialogContext, false),
+                          onPressed: () => Navigator.pop(ctx, false),
                           style: OutlinedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             side: BorderSide(
-                              color: Colors.white.withValues(alpha: 0.28),
-                            ),
+                                color: Colors.white.withValues(alpha: 0.28)),
                           ),
                           child: const Text('Cancel'),
                         ),
@@ -960,7 +1114,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: FilledButton(
-                          onPressed: () => Navigator.pop(dialogContext, true),
+                          onPressed: () => Navigator.pop(ctx, true),
                           style: FilledButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
@@ -976,82 +1130,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         );
       },
     );
-
     return result ?? false;
-  }
-
-  Future<void> _moveSelectionToRecycleBin() async {
-    final ids = selectedAssetIds.toSet();
-    if (ids.isEmpty || isRecycleActionInProgress) return;
-
-    final shouldMove = await _confirmMoveToRecycleBin(ids.length);
-    if (!shouldMove || !mounted) return;
-
-    setState(() {
-      isRecycleActionInProgress = true;
-    });
-    try {
-      await recycleBinDatabase.addAssets(
-        albumImages.where((asset) => ids.contains(asset.id)).toList(),
-      );
-      if (!mounted) return;
-
-      setState(() {
-        albumImages = albumImages
-            .where((asset) => !ids.contains(asset.id))
-            .toList(growable: false);
-        albumVideos = albumVideos
-            .where((asset) => !ids.contains(asset.id))
-            .toList(growable: false);
-        selectedAssetIds.clear();
-      });
-
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              '${ids.length} item${ids.length == 1 ? '' : 's'} moved to recycle bin',
-            ),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-    } finally {
-      if (mounted) {
-        setState(() {
-          isRecycleActionInProgress = false;
-        });
-      }
-    }
-  }
-}
-
-class _AlbumReveal extends StatelessWidget {
-  const _AlbumReveal({required this.order, required this.child});
-
-  final int order;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final delay = order.clamp(0, 10).toInt() * 24;
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: Duration(milliseconds: 340 + delay),
-      curve: Curves.easeOutCubic,
-      builder: (context, value, builtChild) {
-        return Opacity(
-          opacity: value,
-          child: Transform.translate(
-            offset: Offset(0, (1 - value) * 16),
-            child: Transform.scale(
-              scale: 0.99 + (value * 0.01),
-              child: builtChild,
-            ),
-          ),
-        );
-      },
-      child: child,
-    );
   }
 }

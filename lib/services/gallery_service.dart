@@ -128,6 +128,25 @@ class GalleryService {
     return images;
   }
 
+  /// Fetches ALL images from an album across all pages.
+  Future<List<AssetEntity>> fetchAllAlbumImages(
+    AssetPathEntity album,
+  ) async {
+    if (!await _hasPermission()) return [];
+    const batchSize = 200;
+    final all = <AssetEntity>[];
+    var page = 0;
+    while (true) {
+      final batch =
+          await album.getAssetListPaged(page: page, size: batchSize);
+      all.addAll(batch);
+      if (batch.length < batchSize) break;
+      page++;
+    }
+    all.sort(compareAssetsByNewestFirst);
+    return all;
+  }
+
   Future<List<AssetEntity>> fetchAlbumVideos(
     AssetPathEntity album, {
     int page = 0,
@@ -148,7 +167,8 @@ class GalleryService {
         break;
       }
 
-      if (_normalizeAlbumName(candidate.name) == _normalizeAlbumName(album.name)) {
+      if (_normalizeAlbumName(candidate.name) ==
+          _normalizeAlbumName(album.name)) {
         matchingAlbum = candidate;
         break;
       }
@@ -156,9 +176,50 @@ class GalleryService {
 
     if (matchingAlbum == null) return [];
 
-    final videos = await matchingAlbum.getAssetListPaged(page: page, size: size);
+    final videos =
+        await matchingAlbum.getAssetListPaged(page: page, size: size);
     videos.sort(compareAssetsByNewestFirst);
     return videos;
+  }
+
+  /// Fetches ALL videos from an album across all pages.
+  Future<List<AssetEntity>> fetchAllAlbumVideos(
+    AssetPathEntity album,
+  ) async {
+    if (!await _hasPermission()) return [];
+
+    final videoAlbums = await PhotoManager.getAssetPathList(
+      type: RequestType.video,
+      hasAll: true,
+      filterOption: _galleryFilter,
+    );
+
+    AssetPathEntity? matchingAlbum;
+    for (final candidate in videoAlbums) {
+      if (candidate.id == album.id || candidate.name == album.name) {
+        matchingAlbum = candidate;
+        break;
+      }
+      if (_normalizeAlbumName(candidate.name) ==
+          _normalizeAlbumName(album.name)) {
+        matchingAlbum = candidate;
+        break;
+      }
+    }
+    if (matchingAlbum == null) return [];
+
+    const batchSize = 200;
+    final all = <AssetEntity>[];
+    var page = 0;
+    while (true) {
+      final batch =
+          await matchingAlbum.getAssetListPaged(page: page, size: batchSize);
+      all.addAll(batch);
+      if (batch.length < batchSize) break;
+      page++;
+    }
+    all.sort(compareAssetsByNewestFirst);
+    return all;
   }
 
   Future<List<AssetEntity>> fetchImagesByIds(Set<String> assetIds) async {

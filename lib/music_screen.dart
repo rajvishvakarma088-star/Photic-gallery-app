@@ -67,6 +67,17 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   }
 
   Future<void> loadMusics({bool initial = false, bool refresh = false}) async {
+    if (initial || refresh) {
+      final permission = await musicService.requestMusicPermission();
+      if (!permission.hasAccess) {
+        if (!mounted) return;
+        setState(() {
+          isLoading = false;
+        });
+        return;
+      }
+    }
+    
     if (initial) {
       final cached = musicService.musicCache;
       if (cached.isNotEmpty && !refresh) {
