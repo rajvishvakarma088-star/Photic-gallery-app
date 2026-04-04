@@ -2252,6 +2252,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     return CustomScrollView(
       controller: albumsScrollController,
       physics: const BouncingScrollPhysics(),
+      cacheExtent: 1400,
       slivers: [
         SliverToBoxAdapter(
           child: Padding(
@@ -2339,7 +2340,7 @@ class _GalleryScreenState extends State<GalleryScreen>
             child: SizedBox(
               height: 220,
               child: ListView.separated(
-                cacheExtent: 800,
+                cacheExtent: 1000,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 scrollDirection: Axis.horizontal,
                 physics: const BouncingScrollPhysics(
@@ -2377,20 +2378,17 @@ class _GalleryScreenState extends State<GalleryScreen>
         ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
-          sliver: SliverList(
+          sliver: SliverFixedExtentList(
+            itemExtent: 110,
             delegate: SliverChildBuilderDelegate((context, index) {
               final album = otherAlbums[index];
               return Padding(
-                padding: EdgeInsets.only(
-                  bottom: index == otherAlbums.length - 1 ? 0 : 12,
-                ),
-                child: RepaintBoundary(
-                  child: gallery_album_widgets.buildAlbumListTile(
-                    album: album,
-                    colorScheme: colorScheme,
-                    buildImage: buildImage,
-                    onTap: () => openAlbum(album),
-                  ),
+                padding: const EdgeInsets.only(bottom: 12),
+                child: gallery_album_widgets.buildAlbumListTile(
+                  album: album,
+                  colorScheme: colorScheme,
+                  buildImage: buildImage,
+                  onTap: () => openAlbum(album),
                 ),
               );
             }, childCount: otherAlbums.length),

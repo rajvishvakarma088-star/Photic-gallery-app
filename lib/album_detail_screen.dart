@@ -55,6 +55,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Timer? _dragAutoScrollTimer;
   double _dragAutoScrollVelocity = 0;
   Offset? _lastDragGlobalPosition;
+  Timer? _thumbnailWarmupTimer;
 
   bool get _isPinching => _activePointers >= 2;
   bool get isSelectionMode => selectedAssetIds.isNotEmpty;
@@ -223,12 +224,70 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   void initState() {
     super.initState();
     albumImages = List<AssetEntity>.from(widget.images);
+    photoScrollController.addListener(_onGridScroll);
+    videoScrollController.addListener(_onGridScroll);
     unawaited(_loadAlbumVideos());
+  }
+
+  void _onGridScroll() {
+    _scheduleThumbnailWarmup();
+  }
+
+  void _scheduleThumbnailWarmup() {
+    if (!mounted) return;
+    _thumbnailWarmupTimer?.cancel();
+    _thumbnailWarmupTimer = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted) return;
+      _warmVisibleThumbnailBand();
+    });
+  }
+
+  void _warmVisibleThumbnailBand() {
+    if (!mounted) return;
+    final controller =
+        selectedMediaTab == 0 ? photoScrollController : videoScrollController;
+    final assets = selectedMediaTab == 0 ? albumImages : albumVideos;
+    if (!controller.hasClients || assets.isEmpty) return;
+
+    final viewportWidth = MediaQuery.of(context).size.width;
+    const gridHorizontalPadding = 20.0;
+    const spacing = 6.0;
+    final contentWidth =
+        viewportWidth - gridHorizontalPadding - (albumGridCount - 1) * spacing;
+    final tileExtent = (contentWidth / albumGridCount) + spacing;
+
+    final scrollOffset = controller.offset;
+    final viewportHeight = controller.position.viewportDimension;
+
+    final firstRow = (scrollOffset / tileExtent).floor();
+    final visibleRows = (viewportHeight / tileExtent).ceil() + 2;
+
+    final startIndex = (firstRow * albumGridCount).clamp(0, assets.length);
+    final endIndex = ((firstRow + visibleRows + 4) * albumGridCount)
+        .clamp(0, assets.length);
+
+    for (int i = startIndex; i < endIndex; i++) {
+      final asset = assets[i];
+      final id = '${asset.id}@$albumThumbPx';
+      if (!thumbnailProviderCache.containsKey(id)) {
+        final provider = AssetEntityImageProvider(
+          asset,
+          isOriginal: false,
+          thumbnailSize: ThumbnailSize.square(albumThumbPx),
+          thumbnailFormat: ThumbnailFormat.jpeg,
+        );
+        thumbnailProviderCache[id] = provider;
+        unawaited(precacheImage(provider, context));
+      }
+    }
   }
 
   @override
   void dispose() {
+    _thumbnailWarmupTimer?.cancel();
     _dragAutoScrollTimer?.cancel();
+    photoScrollController.removeListener(_onGridScroll);
+    videoScrollController.removeListener(_onGridScroll);
     _gridTileKeys.clear();
     photoScrollController.dispose();
     videoScrollController.dispose();
@@ -523,7 +582,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           ? photoScrollController
           : videoScrollController,
       padding: const EdgeInsets.all(10),
-      cacheExtent: 800,
+      cacheExtent: 1500,
       itemCount: assets.length,
       physics: _isPinching
           ? const NeverScrollableScrollPhysics()
