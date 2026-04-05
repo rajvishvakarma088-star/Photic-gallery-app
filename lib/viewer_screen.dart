@@ -360,7 +360,14 @@ class _ViewerScreenState extends State<ViewerScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     _applySystemUiStyle(Theme.of(context).brightness);
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final res = _newAssetPostEdit ?? (_editCompleted ? 'edited' : null);
+        Navigator.pop(context, res);
+      },
+      child: Scaffold(
       backgroundColor: Colors.transparent,
       extendBodyBehindAppBar: true,
 
@@ -420,8 +427,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
                     final upwardDrag = upwardDragNotifier.value;
 
                     if (verticalDrag > 150 || velocity > 700) {
+                      HapticFeedback.mediumImpact();
                       Navigator.pop(context, _newAssetPostEdit ?? (_editCompleted ? 'edited' : null));
                     } else if (velocity < -140 || upwardDrag > 60) {
+                      HapticFeedback.mediumImpact();
                       openDetails();
                     } else {
                       verticalDragNotifier.value = 0;
@@ -651,7 +660,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
           ),
         ],
       ),
-    );
+    ),);
   }
 
   Widget buildThumbnailStrip(bool isDark) {
@@ -1341,145 +1350,196 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   void showContextMenu(bool isDark) {
-    showModalBottomSheet(
+    final textColor = isDark ? Colors.white : const Color(0xFF211A33);
+    final colorScheme = Theme.of(context).colorScheme;
+
+    showGeneralDialog(
       context: context,
-      isScrollControlled: true,
-      enableDrag: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        final textColor = isDark ? Colors.white : const Color(0xFF211A33);
-        return _buildAnimatedSheet(
-          child: GlassContainer(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
-            blurSigma: 22,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
-              child: SafeArea(
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 5,
-                        margin: const EdgeInsets.only(bottom: 20),
-                        decoration: BoxDecoration(
-                          color: textColor.withValues(alpha: 0.22),
-                          borderRadius: BorderRadius.circular(99),
-                        ),
+      barrierDismissible: true,
+      barrierLabel: 'ContextMenu',
+      barrierColor: Colors.black26,
+      transitionDuration: const Duration(milliseconds: 240),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curve = Curves.easeOutBack;
+        final curvedAnimation = CurvedAnimation(parent: animation, curve: curve);
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.8, end: 1.0).animate(curvedAnimation),
+          alignment: Alignment.topRight,
+          child: FadeTransition(
+            opacity: animation,
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => Navigator.pop(dialogContext),
+                child: Container(color: Colors.transparent),
+              ),
+            ),
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 56,
+              right: 20,
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(26),
+                blurSigma: 22,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 260),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+                            child: Text(
+                              'Photo Actions',
+                              style: TextStyle(
+                                color: textColor,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            child: Divider(
+                              color: textColor.withValues(alpha: 0.12),
+                              height: 1,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          _buildPopupMenuItem(
+                            icon: Icons.edit_rounded,
+                            title: 'Edit',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              editAsset();
+                            },
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.drive_file_rename_outline_rounded,
+                            title: 'Rename',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _showRenameDialog();
+                            },
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.share_rounded,
+                            title: 'Share',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              shareAsset();
+                            },
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.wallpaper_rounded,
+                            title: 'Set As',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _showSetAsSheet(isDark);
+                            },
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.open_in_new_rounded,
+                            title: 'Open In',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              openWithAnotherApp();
+                            },
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            child: Divider(
+                              color: textColor.withValues(alpha: 0.12),
+                              height: 1,
+                            ),
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.visibility_off_rounded,
+                            title: 'Move to Vault',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              hideAsset();
+                            },
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.delete_rounded,
+                            title: 'Recycle Bin',
+                            isDark: isDark,
+                            isDestructive: true,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              deleteAsset();
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                        ],
                       ),
-                      Text(
-                        'Photo Actions',
-                        style: TextStyle(
-                          color: textColor,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Quick tools and premium actions for this image.',
-                        style: TextStyle(
-                          color: textColor.withValues(alpha: 0.68),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _buildMenuSectionLabel(
-                        title: 'Editing',
-                        color: textColor,
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.edit_rounded,
-                        title: 'Edit',
-                        subtitle: 'Open the built-in editor',
-                        onTap: () {
-                          Navigator.pop(context);
-                          editAsset();
-                        },
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.drive_file_rename_outline_rounded,
-                        title: 'Rename',
-                        subtitle: 'Prepare a better file name',
-                        onTap: () async {
-                          Navigator.pop(context);
-                          await _showRenameDialog();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildMenuSectionLabel(
-                        title: 'Sharing',
-                        color: textColor,
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.open_in_new_rounded,
-                        title: 'Open With App',
-                        subtitle: 'Send this image into another app',
-                        onTap: () async {
-                          Navigator.pop(context);
-                          await openWithAnotherApp();
-                        },
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.wallpaper_rounded,
-                        title: 'Set As',
-                        subtitle: 'Wallpaper, lock screen, or profile photo',
-                        onTap: () async {
-                          Navigator.pop(context);
-                          await _showSetAsSheet(isDark);
-                        },
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.share_rounded,
-                        title: 'Share',
-                        subtitle: 'Share this image anywhere',
-                        onTap: () {
-                          Navigator.pop(context);
-                          shareAsset();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildMenuSectionLabel(
-                        title: 'Privacy',
-                        color: textColor,
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.visibility_off_rounded,
-                        title: 'Move to Vault',
-                        subtitle: 'Hide this image from the gallery',
-                        onTap: () {
-                          Navigator.pop(context);
-                          hideAsset();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildMenuSectionLabel(title: 'Delete', color: textColor),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.delete_rounded,
-                        title: 'Move to Recycle Bin',
-                        subtitle: 'Remove it now, restore it later',
-                        destructive: true,
-                        onTap: () {
-                          Navigator.pop(context);
-                          deleteAsset();
-                        },
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
+          ],
         );
       },
+    );
+  }
+
+  Widget _buildPopupMenuItem({
+    required IconData icon,
+    required String title,
+    required bool isDark,
+    required VoidCallback onTap,
+    bool isDestructive = false,
+  }) {
+    final textColor = isDark ? Colors.white : const Color(0xFF211A33);
+    final accentColor = isDestructive ? const Color(0xFFE66A74) : textColor;
+
+    return InkWell(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap();
+      },
+      splashColor: accentColor.withValues(alpha: 0.1),
+      highlightColor: accentColor.withValues(alpha: 0.05),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 21,
+              color: isDestructive ? accentColor : accentColor.withValues(alpha: 0.78),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: accentColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1580,21 +1640,6 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
-  Widget _buildMenuSectionLabel({required String title, required Color color}) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 2, 4, 10),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          color: color.withValues(alpha: 0.54),
-          fontSize: 11,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 1.1,
-        ),
-      ),
-    );
-  }
-
   Widget _buildAnimatedSheet({required Widget child}) {
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
@@ -1609,6 +1654,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       child: child,
     );
   }
+
 
   Widget buildThumbnailStripToggle(bool isDark) {
     return GestureDetector(

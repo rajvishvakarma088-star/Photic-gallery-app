@@ -19,6 +19,7 @@ class AlbumSummary {
 class GalleryService {
   AssetPathEntity? _allPhotosPathCache;
   AssetPathEntity? _allVideosPathCache;
+  List<AssetEntity>? _allAssetsCache;
   final FilterOptionGroup _galleryFilter = FilterOptionGroup(
     orders: const [
       OrderOption(type: OrderOptionType.createDate, asc: false),
@@ -46,6 +47,7 @@ class GalleryService {
   void clearCache() {
     _allPhotosPathCache = null;
     _allVideosPathCache = null;
+    _allAssetsCache = null;
   }
 
   Future<List<AssetEntity>> fetchImages({
@@ -59,6 +61,29 @@ class GalleryService {
     final images = await allPhotos.getAssetListPaged(page: page, size: size);
     images.sort(compareAssetsByNewestFirst);
     return images;
+  }
+
+  Future<List<AssetEntity>> fetchAllAssets({bool forceRefresh = false}) async {
+    if (!forceRefresh && _allAssetsCache != null) return _allAssetsCache!;
+    if (!await _hasPermission()) return [];
+    
+    // Fetch both images and videos
+    final pathList = await PhotoManager.getAssetPathList(
+      type: RequestType.common, // common = images + videos
+      hasAll: true,
+      filterOption: _galleryFilter,
+    );
+
+    if (pathList.isEmpty) return [];
+    
+    final allPath = pathList.firstWhere((a) => a.isAll, orElse: () => pathList.first);
+    final count = await allPath.assetCountAsync;
+    
+    // Fetch all handles - this is metadata only, relatively fast
+    final all = await allPath.getAssetListRange(start: 0, end: count);
+    all.sort(compareAssetsByNewestFirst);
+    _allAssetsCache = all;
+    return all;
   }
 
   Future<List<AssetEntity>> fetchVideos({

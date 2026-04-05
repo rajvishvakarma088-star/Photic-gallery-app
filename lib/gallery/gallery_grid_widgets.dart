@@ -106,51 +106,95 @@ Widget buildGalleryGridTile({
       onLongPressStart: onLongPressStart,
       onLongPressMoveUpdate: onLongPressMoveUpdate,
       onLongPressEnd: onLongPressEnd,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          imageChild,
-          if (isSelected)
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.28),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: Colors.white,
-                    width: 2,
-                  ),
-                ),
-                child: const Align(
-                  alignment: Alignment.topLeft,
-                  child: Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Icon(
-                      Icons.check_circle,
-                      color: Colors.white,
+      child: TweenAnimationBuilder<double>(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        tween: Tween<double>(begin: 1.0, end: isSelected ? 0.92 : 1.0),
+        builder: (context, scale, child) {
+          return Transform.scale(
+            scale: scale,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                imageChild,
+                if (isSelected)
+                  Positioned.fill(
+                    child: TweenAnimationBuilder<double>(
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOutBack,
+                      tween: Tween<double>(begin: 0.0, end: 1.0),
+                      builder: (context, opacity, child) {
+                        return Opacity(
+                          opacity: opacity.clamp(0.0, 1.0),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.28),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 2,
+                              ),
+                            ),
+                            child: Align(
+                              alignment: Alignment.topLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.all(8),
+                                child: Transform.scale(
+                                  scale: opacity,
+                                  child: const Icon(
+                                    Icons.check_circle,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
-                ),
-              ),
+                if (isFavorite)
+                  const Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Icon(
+                      Icons.favorite,
+                      color: Colors.red,
+                    ),
+                  ),
+                if (isAnimating)
+                  const Center(
+                    child: Icon(
+                      Icons.favorite,
+                      color: Colors.white,
+                      size: 60,
+                    ),
+                  ),
+                if (asset.type == AssetType.video)
+                  Positioned(
+                    right: 8,
+                    bottom: 8,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.42),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.2),
+                          width: 0.5,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.play_arrow_rounded,
+                        color: Colors.white,
+                        size: 14,
+                      ),
+                    ),
+                  ),
+              ],
             ),
-          if (isFavorite)
-            const Positioned(
-              top: 8,
-              right: 8,
-              child: Icon(
-                Icons.favorite,
-                color: Colors.red,
-              ),
-            ),
-          if (isAnimating)
-            const Center(
-              child: Icon(
-                Icons.favorite,
-                color: Colors.white,
-                size: 60,
-              ),
-            ),
-        ],
+          );
+        },
       ),
     ),
   );

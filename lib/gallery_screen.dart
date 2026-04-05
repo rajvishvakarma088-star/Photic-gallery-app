@@ -26,6 +26,7 @@ import 'music_screen.dart';
 import 'services/audio_player_service.dart';
 import 'mini_music_player.dart';
 import 'music_player_screen.dart';
+import 'search_screen.dart';
 
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key});
@@ -827,6 +828,29 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
   }
 
+  void _openSearch(BuildContext context) {
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.transparent, // Background handled by SearchScreen glass
+        transitionDuration: const Duration(milliseconds: 320),
+        reverseTransitionDuration: const Duration(milliseconds: 280),
+        pageBuilder: (context, animation, secondaryAnimation) => const SearchScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          final curve = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+          return FadeTransition(
+            opacity: curve,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1.0).animate(curve),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Future<bool> _confirmMoveToVault(int count) async {
     final result = await showDialog<bool>(
       context: context,
@@ -1003,10 +1027,25 @@ class _GalleryScreenState extends State<GalleryScreen>
     final visibleImages = getVisibleImages();
     final colorScheme = Theme.of(context).colorScheme;
 
-    showDialog(
+    showGeneralDialog(
       context: context,
+      barrierDismissible: true,
+      barrierLabel: 'SelectionMenu',
       barrierColor: Colors.black26,
-      builder: (dialogContext) {
+      transitionDuration: const Duration(milliseconds: 240),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curve = Curves.easeOutBack;
+        final curvedAnimation = CurvedAnimation(parent: animation, curve: curve);
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.8, end: 1.0).animate(curvedAnimation),
+          alignment: Alignment.topRight,
+          child: FadeTransition(
+            opacity: animation,
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
         return Stack(
           children: [
             // Dismiss background
@@ -1018,7 +1057,7 @@ class _GalleryScreenState extends State<GalleryScreen>
             ),
             // Menu positioned at top-right
             Positioned(
-              top: 56,
+              top: MediaQuery.of(context).padding.top + 56,
               right: 16,
               child: GlassContainer(
                 borderRadius: BorderRadius.circular(20),
@@ -3024,6 +3063,15 @@ class _GalleryScreenState extends State<GalleryScreen>
               onPressed: () {
                 context.read<ThemeProvider>().toggleTheme(context);
               },
+            ),
+          if (!isSelectionMode)
+            Hero(
+              tag: 'search_icon',
+              child: IconButton(
+                tooltip: 'Search',
+                icon: const Icon(Icons.search_rounded),
+                onPressed: () => _openSearch(context),
+              ),
             ),
         ],
       ),

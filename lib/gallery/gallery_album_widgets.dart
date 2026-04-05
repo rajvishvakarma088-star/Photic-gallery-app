@@ -92,12 +92,17 @@ Widget buildFeaturedAlbumCard({
             ),
             Positioned(
               left: 12,
-              right: 12,
               bottom: 12,
-              child: GlassContainer(
-                borderRadius: BorderRadius.circular(20),
-                blurSigma: 12,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.56),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    width: 0.8,
+                  ),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
@@ -108,8 +113,9 @@ Widget buildFeaturedAlbumCard({
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w800,
+                        letterSpacing: -0.1,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -117,7 +123,7 @@ Widget buildFeaturedAlbumCard({
                       '${album.count} items',
                       style: TextStyle(
                         color: Colors.white.withOpacity(0.8),
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w600,
                       ),
                     ),

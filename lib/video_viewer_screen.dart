@@ -122,90 +122,88 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
       enableDrag: true,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) {
-        return _buildAnimatedSheet(
-          child: GlassContainer(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
-            blurSigma: 20,
-            child: SafeArea(
-              top: false,
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 44,
-                          height: 5,
-                          decoration: BoxDecoration(
-                            color: textColor.withValues(alpha: 0.22),
-                            borderRadius: BorderRadius.circular(99),
-                          ),
+        return GlassContainer(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
+          blurSigma: 20,
+          child: SafeArea(
+            top: false,
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 44,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: textColor.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(99),
                         ),
                       ),
-                      const SizedBox(height: 18),
-                      Text(
-                        'Playback Speed',
-                        style: TextStyle(
-                          color: textColor,
-                          fontSize: 21,
-                          fontWeight: FontWeight.w800,
-                        ),
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      'Playback Speed',
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 21,
+                        fontWeight: FontWeight.w800,
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Choose how fast this video should play.',
-                        style: TextStyle(
-                          color: textColor.withValues(alpha: 0.7),
-                        ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Choose how fast this video should play.',
+                      style: TextStyle(
+                        color: textColor.withValues(alpha: 0.7),
                       ),
-                      const SizedBox(height: 14),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: speeds
-                            .map((speed) {
-                              final isActive =
-                                  (controller.value.playbackSpeed - speed)
-                                      .abs() <
-                                  0.001;
-                              return GestureDetector(
-                                onTap: () async {
-                                  HapticFeedback.selectionClick();
-                                  await controller.setPlaybackSpeed(speed);
-                                  if (!mounted || !sheetContext.mounted) return;
-                                  Navigator.pop(sheetContext);
-                                  setState(() {});
-                                },
-                                child: GlassContainer(
-                                  borderRadius: BorderRadius.circular(18),
-                                  enableBlur: false,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 12,
-                                    ),
-                                    child: Text(
-                                      '${speed}x',
-                                      style: TextStyle(
-                                        color: isActive
-                                            ? (isDark
-                                                  ? const Color(0xFFDCCFFF)
-                                                  : const Color(0xFF5D44D6))
-                                            : textColor,
-                                        fontWeight: FontWeight.w800,
-                                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: speeds
+                          .map((speed) {
+                            final isActive =
+                                (controller.value.playbackSpeed - speed)
+                                    .abs() <
+                                0.001;
+                            return GestureDetector(
+                              onTap: () async {
+                                HapticFeedback.selectionClick();
+                                await controller.setPlaybackSpeed(speed);
+                                if (!mounted || !sheetContext.mounted) return;
+                                Navigator.pop(sheetContext);
+                                setState(() {});
+                              },
+                              child: GlassContainer(
+                                borderRadius: BorderRadius.circular(18),
+                                enableBlur: false,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 12,
+                                  ),
+                                  child: Text(
+                                    '${speed}x',
+                                    style: TextStyle(
+                                      color: isActive
+                                          ? (isDark
+                                                ? const Color(0xFFDCCFFF)
+                                                : const Color(0xFF5D44D6))
+                                          : textColor,
+                                      fontWeight: FontWeight.w800,
                                     ),
                                   ),
                                 ),
-                              );
-                            })
-                            .toList(growable: false),
-                      ),
-                    ],
-                  ),
+                              ),
+                            );
+                          })
+                          .toList(growable: false),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -216,139 +214,186 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
   }
 
   void showContextMenu(bool isDark) {
-    showModalBottomSheet(
+    final textColor = isDark ? Colors.white : const Color(0xFF221B34);
+
+    showGeneralDialog(
       context: context,
-      isScrollControlled: true,
-      enableDrag: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        final textColor = isDark ? Colors.white : const Color(0xFF221B34);
-        return _buildAnimatedSheet(
-          child: GlassContainer(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
-            blurSigma: 22,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
-              child: SafeArea(
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 5,
-                        margin: const EdgeInsets.only(bottom: 20),
-                        decoration: BoxDecoration(
-                          color: textColor.withValues(alpha: 0.22),
-                          borderRadius: BorderRadius.circular(99),
-                        ),
+      barrierDismissible: true,
+      barrierLabel: 'ContextMenu',
+      barrierColor: Colors.black26,
+      transitionDuration: const Duration(milliseconds: 240),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curve = Curves.easeOutBack;
+        final curvedAnimation = CurvedAnimation(parent: animation, curve: curve);
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.8, end: 1.0).animate(curvedAnimation),
+          alignment: Alignment.topRight,
+          child: FadeTransition(
+            opacity: animation,
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => Navigator.pop(dialogContext),
+                child: Container(color: Colors.transparent),
+              ),
+            ),
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 56,
+              right: 20,
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(26),
+                blurSigma: 22,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 250),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+                            child: Text(
+                              'Video Actions',
+                              style: TextStyle(
+                                color: textColor,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            child: Divider(
+                              color: textColor.withValues(alpha: 0.12),
+                              height: 1,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          _buildPopupMenuItem(
+                            icon: hideViewerChrome ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                            title: hideViewerChrome ? 'Exit Full Screen' : 'Full Screen',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _toggleImmersivePlayback();
+                            },
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.speed_rounded,
+                            title: 'Playback Speed',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              _showPlaybackSpeedSheet(isDark);
+                            },
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.share_rounded,
+                            title: 'Share',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              shareAsset();
+                            },
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.open_in_new_rounded,
+                            title: 'Open In',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              openWithAnotherApp();
+                            },
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            child: Divider(
+                              color: textColor.withValues(alpha: 0.12),
+                              height: 1,
+                            ),
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.visibility_off_rounded,
+                            title: 'Move to Vault',
+                            isDark: isDark,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              hideAsset();
+                            },
+                          ),
+                          _buildPopupMenuItem(
+                            icon: Icons.delete_rounded,
+                            title: 'Recycle Bin',
+                            isDark: isDark,
+                            isDestructive: true,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              deleteAsset();
+                            },
+                          ),
+                          const SizedBox(height: 8),
+                        ],
                       ),
-                      Text(
-                        'Video Actions',
-                        style: TextStyle(
-                          color: textColor,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Playback tools and quick actions for this video.',
-                        style: TextStyle(
-                          color: textColor.withValues(alpha: 0.68),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _buildMenuSectionLabel(
-                        title: 'Playback',
-                        color: textColor,
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: hideViewerChrome
-                            ? Icons.fullscreen_exit_rounded
-                            : Icons.fullscreen_rounded,
-                        title: hideViewerChrome
-                            ? 'Exit Full Screen'
-                            : 'Full Screen Playback',
-                        subtitle: 'Hide or show the viewer chrome',
-                        onTap: () async {
-                          Navigator.pop(context);
-                          await _toggleImmersivePlayback();
-                        },
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.speed_rounded,
-                        title: 'Playback Speed',
-                        subtitle: '0.5x to 2.0x speed control',
-                        onTap: () async {
-                          Navigator.pop(context);
-                          await _showPlaybackSpeedSheet(isDark);
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildMenuSectionLabel(
-                        title: 'Sharing',
-                        color: textColor,
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.open_in_new_rounded,
-                        title: 'Open With App',
-                        subtitle: 'Send this video into another app',
-                        onTap: () async {
-                          Navigator.pop(context);
-                          await openWithAnotherApp();
-                        },
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.share_rounded,
-                        title: 'Share Video',
-                        subtitle: 'Share this clip anywhere',
-                        onTap: () {
-                          Navigator.pop(context);
-                          shareAsset();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildMenuSectionLabel(
-                        title: 'Privacy',
-                        color: textColor,
-                      ),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.visibility_off_rounded,
-                        title: 'Move to Vault',
-                        subtitle: 'Hide this video from the gallery',
-                        onTap: () {
-                          Navigator.pop(context);
-                          hideAsset();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      _buildMenuSectionLabel(title: 'Delete', color: textColor),
-                      _buildMenuTile(
-                        isDark: isDark,
-                        icon: Icons.delete_rounded,
-                        title: 'Move to Recycle Bin',
-                        subtitle: 'Remove it now, restore it later',
-                        destructive: true,
-                        onTap: () {
-                          Navigator.pop(context);
-                          deleteAsset();
-                        },
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
+          ],
         );
       },
+    );
+  }
+
+  Widget _buildPopupMenuItem({
+    required IconData icon,
+    required String title,
+    required bool isDark,
+    required VoidCallback onTap,
+    bool isDestructive = false,
+  }) {
+    final textColor = isDark ? Colors.white : const Color(0xFF221B34);
+    final accentColor = isDestructive ? const Color(0xFFE66A74) : textColor;
+
+    return InkWell(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap();
+      },
+      splashColor: accentColor.withValues(alpha: 0.1),
+      highlightColor: accentColor.withValues(alpha: 0.05),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 21,
+              color: isDestructive ? accentColor : accentColor.withValues(alpha: 0.78),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: accentColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -704,20 +749,6 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
     );
   }
 
-  Widget _buildAnimatedSheet({required Widget child}) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-      builder: (context, value, sheetChild) {
-        return Transform.translate(
-          offset: Offset(0, (1 - value) * 26),
-          child: Opacity(opacity: value, child: sheetChild),
-        );
-      },
-      child: child,
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -762,6 +793,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
               final verticalDrag = verticalDragNotifier.value;
 
               if (verticalDrag > 150 || velocity > 700) {
+                HapticFeedback.mediumImpact();
                 Navigator.pop(context);
               } else {
                 verticalDragNotifier.value = 0;
@@ -789,6 +821,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                           onPageChanged: (idx) {
                             setState(() {
                               currentIndex = idx;
+                              showViewerChrome = true;
                             });
                           },
                           itemBuilder: (context, idx) {

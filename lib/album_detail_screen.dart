@@ -4,9 +4,12 @@ import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'glass_container.dart';
+import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
 import 'services/recycle_bin_database.dart';
+import 'services/vault_service.dart';
 import 'theme_provider.dart';
 import 'video_viewer_screen.dart';
 import 'viewer_screen.dart';
@@ -35,6 +38,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   final GalleryService service = GalleryService();
   final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
+  final VaultService vaultService = VaultService.instance;
 
   // PageController drives the Photos / Videos tab swipe
   final PageController _pageController = PageController();
@@ -423,25 +427,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         actions: [
           if (isSelectionMode)
             IconButton(
-              tooltip: visibleAssets.isNotEmpty &&
-                      visibleAssets
-                          .every((a) => selectedAssetIds.contains(a.id))
-                  ? 'Deselect all'
-                  : 'Select all',
-              icon: Icon(
-                visibleAssets.isNotEmpty &&
-                        visibleAssets
-                            .every((a) => selectedAssetIds.contains(a.id))
-                    ? Icons.remove_done_rounded
-                    : Icons.select_all_rounded,
-              ),
-              onPressed: _toggleSelectAll,
-            ),
-          if (isSelectionMode)
-            IconButton(
-              tooltip: 'Move to recycle bin',
-              icon: const Icon(Icons.delete_rounded),
-              onPressed: isRecycleActionInProgress ? null : _moveToRecycleBin,
+              tooltip: 'Selection actions',
+              icon: const Icon(Icons.more_vert_rounded),
+              onPressed: _showSelectionMenu,
             ),
         ],
       ),
@@ -998,6 +986,359 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       }
       _gridTileKeys.clear();
     });
+  }
+
+  Future<void> _showSelectionMenu() async {
+    final colorScheme = Theme.of(context).colorScheme;
+    final assets = visibleAssets;
+
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'SelectionMenu',
+      barrierColor: Colors.black26,
+      transitionDuration: const Duration(milliseconds: 240),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curve = Curves.easeOutBack;
+        final curvedAnimation = CurvedAnimation(parent: animation, curve: curve);
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.8, end: 1.0).animate(curvedAnimation),
+          alignment: Alignment.topRight,
+          child: FadeTransition(
+            opacity: animation,
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => Navigator.pop(dialogContext),
+                child: Container(color: Colors.transparent),
+              ),
+            ),
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 56,
+              right: 16,
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(24),
+                blurSigma: 22,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 240),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+                          child: SelectionContainer.disabled(
+                            child: Text(
+                              '${selectedAssetIds.length} selected',
+                              style: TextStyle(
+                                color: colorScheme.onSurface,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          child: Divider(
+                            color: colorScheme.outlineVariant.withValues(alpha: 0.2),
+                            height: 1,
+                          ),
+                        ),
+                        _buildMenuTile(
+                          Icons.share_rounded,
+                          'Share',
+                          colorScheme,
+                          () {
+                            Navigator.pop(dialogContext);
+                            _shareSelected();
+                          },
+                        ),
+                        _buildMenuTile(
+                          Icons.favorite_rounded,
+                          'Favorite',
+                          colorScheme,
+                          () {
+                            Navigator.pop(dialogContext);
+                            _toggleFavoriteAll();
+                          },
+                        ),
+                        _buildMenuTile(
+                          Icons.visibility_off_rounded,
+                          'Move to Vault',
+                          colorScheme,
+                          () {
+                            Navigator.pop(dialogContext);
+                            _moveToVault();
+                          },
+                        ),
+                        _buildMenuTile(
+                          Icons.delete_rounded,
+                          'Recycle Bin',
+                          colorScheme,
+                          () {
+                            Navigator.pop(dialogContext);
+                            _moveToRecycleBin();
+                          },
+                          isDestructive: true,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          child: Divider(
+                            color: colorScheme.outlineVariant.withValues(alpha: 0.2),
+                            height: 1,
+                          ),
+                        ),
+                        _buildMenuTile(
+                          Icons.select_all_rounded,
+                          'Select All',
+                          colorScheme,
+                          () {
+                            Navigator.pop(dialogContext);
+                            _toggleSelectAll();
+                          },
+                        ),
+                        _buildMenuTile(
+                          Icons.deselect_rounded,
+                          'Deselect All',
+                          colorScheme,
+                          () {
+                            Navigator.pop(dialogContext);
+                            setState(() => selectedAssetIds.clear());
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildMenuTile(
+    IconData icon,
+    String label,
+    ColorScheme colorScheme,
+    VoidCallback onTap, {
+    bool isDestructive = false,
+  }) {
+    return InkWell(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap();
+      },
+      splashColor: (isDestructive ? colorScheme.error : colorScheme.primary).withValues(alpha: 0.12),
+      highlightColor: (isDestructive ? colorScheme.error : colorScheme.primary).withValues(alpha: 0.06),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 22,
+              color: isDestructive ? colorScheme.error : colorScheme.onSurface.withValues(alpha: 0.8),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: isDestructive ? colorScheme.error : colorScheme.onSurface,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _shareSelected() async {
+    final ids = selectedAssetIds.toSet();
+    if (ids.isEmpty) return;
+
+    final List<AssetEntity> toShare = [];
+    toShare.addAll(albumImages.where((a) => ids.contains(a.id)));
+    toShare.addAll(albumVideos.where((a) => ids.contains(a.id)));
+
+    final List<XFile> files = [];
+    for (final asset in toShare) {
+      final f = await asset.file;
+      if (f != null) files.add(XFile(f.path));
+    }
+
+    if (files.isNotEmpty) {
+      await Share.shareXFiles(files);
+    }
+    setState(() => selectedAssetIds.clear());
+  }
+
+  Future<void> _moveToVault() async {
+    final ids = selectedAssetIds.toSet();
+    if (ids.isEmpty) return;
+
+    final shouldMove = await _confirmVault(ids.length);
+    if (!shouldMove) return;
+
+    final List<AssetEntity> toMove = [];
+    toMove.addAll(albumImages.where((a) => ids.contains(a.id)));
+    toMove.addAll(albumVideos.where((a) => ids.contains(a.id)));
+
+    try {
+      for (final asset in toMove) {
+        await vaultService.moveAssetToVault(asset);
+      }
+      setState(() {
+        albumImages = albumImages.where((a) => !ids.contains(a.id)).toList();
+        albumVideos = albumVideos.where((a) => !ids.contains(a.id)).toList();
+        selectedAssetIds.clear();
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${ids.length} moved to Safe Folder'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to move some items to Vault'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleFavoriteAll() async {
+    final ids = selectedAssetIds.toSet();
+    if (ids.isEmpty) return;
+
+    final List<AssetEntity> toFav = [];
+    toFav.addAll(albumImages.where((a) => ids.contains(a.id)));
+    toFav.addAll(albumVideos.where((a) => ids.contains(a.id)));
+
+    bool anyAdded = false;
+    for (final asset in toFav) {
+      final isFav = await FavoritesDatabase.instance.isFavorite(asset.id);
+      if (isFav) {
+        await FavoritesDatabase.instance.removeFavorite(asset.id);
+      } else {
+        await FavoritesDatabase.instance.addFavorite(asset.id);
+        anyAdded = true;
+      }
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(anyAdded ? 'Added to Favorites' : 'Removed from Favorites'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+    setState(() => selectedAssetIds.clear());
+  }
+
+  Future<bool> _confirmVault(int count) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      builder: (dialogContext) {
+        final colorScheme = Theme.of(dialogContext).colorScheme;
+        final isDark = Theme.of(dialogContext).brightness == Brightness.dark;
+
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+          child: GlassContainer(
+            borderRadius: BorderRadius.circular(34),
+            blurSigma: 18,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withValues(alpha: isDark ? 0.12 : 0.32),
+                        ),
+                        child: Icon(Icons.visibility_off_rounded, color: colorScheme.onSurface),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          'Move to Safe Folder?',
+                          style: TextStyle(
+                            color: colorScheme.onSurface,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Moved items will be hidden from the gallery and require your vault password to view.',
+                    style: TextStyle(
+                        color: colorScheme.onSurface.withValues(alpha: 0.76), height: 1.42),
+                  ),
+                  const SizedBox(height: 22),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(dialogContext, false),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            side: BorderSide(color: Colors.white.withValues(alpha: 0.28)),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(dialogContext, true),
+                          style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14)),
+                          child: const Text('Move'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    return result ?? false;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
