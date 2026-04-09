@@ -9,6 +9,7 @@ import 'services/music_service.dart';
 import 'services/audio_player_service.dart';
 import 'services/recycle_bin_database.dart';
 import 'music_player_screen.dart';
+import 'utils/lru_cache.dart';
 
 class MusicScreen extends StatefulWidget {
   final AudioPlayerService? audioPlayerService;
@@ -27,8 +28,11 @@ class MusicScreen extends StatefulWidget {
 }
 
 class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+  static const int _artworkCacheEntries = 500;
   final MusicService musicService = MusicService();
   late AudioPlayerService audioPlayerService;
+  final LruMap<String, ImageProvider> _artworkCache =
+      LruMap<String, ImageProvider>(_artworkCacheEntries);
   
   List<MusicFile> allMusics = [];
   List<MusicFile> filteredMusics = [];
@@ -63,7 +67,47 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _scrollController.dispose();
+    _artworkCache.clear();
     super.dispose();
+  }
+
+  Widget _buildArtwork(MusicFile music, ColorScheme colorScheme) {
+    final fallback = _buildPlaceholder(colorScheme);
+
+    return FutureBuilder<Uint8List?>(
+      future: music.getThumbnail(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done &&
+            snapshot.data != null) {
+          final provider = _artworkCache.putIfAbsent(
+            '${music.id}@memory',
+            () => MemoryImage(snapshot.data!),
+          );
+          return Image(
+            image: provider,
+            fit: BoxFit.cover,
+          );
+        }
+
+        if (music.albumArtPath != null) {
+          final provider = _artworkCache.putIfAbsent(
+            '${music.id}@file',
+            () => ResizeImage(
+              FileImage(File(music.albumArtPath!)),
+              width: 150,
+              height: 150,
+            ),
+          );
+          return Image(
+            image: provider,
+            fit: BoxFit.cover,
+            errorBuilder: (c, e, s) => fallback,
+          );
+        }
+
+        return fallback;
+      },
+    );
   }
 
   Future<void> loadMusics({bool initial = false, bool refresh = false}) async {
@@ -452,31 +496,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                     child: SizedBox(
                       width: 74,
                       height: 74,
-                      child: FutureBuilder<Uint8List?>(
-                        future: music.getThumbnail(),
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState == ConnectionState.done && snapshot.data != null) {
-                            return Image.memory(
-                              snapshot.data!,
-                              fit: BoxFit.cover,
-                              cacheHeight: 150,
-                              cacheWidth: 150,
-                            );
-                          }
-                          
-                          if (music.albumArtPath != null) {
-                            return Image.file(
-                              File(music.albumArtPath!),
-                              fit: BoxFit.cover,
-                              cacheHeight: 150,
-                              cacheWidth: 150,
-                              errorBuilder: (c, e, s) => _buildPlaceholder(colorScheme),
-                            );
-                          }
-
-                          return _buildPlaceholder(colorScheme);
-                        },
-                      ),
+                      child: _buildArtwork(music, colorScheme),
                     ),
                   ),
                   const SizedBox(width: 14),

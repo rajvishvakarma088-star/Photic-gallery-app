@@ -13,6 +13,8 @@ import 'services/screenshot_protection_service.dart';
 import 'services/vault_database.dart';
 import 'services/vault_service.dart';
 import 'theme_provider.dart';
+import 'utils/fast_page_scroll_physics.dart';
+import 'utils/lru_cache.dart';
 
 class VaultScreen extends StatefulWidget {
   const VaultScreen({super.key});
@@ -22,7 +24,10 @@ class VaultScreen extends StatefulWidget {
 }
 
 class _VaultScreenState extends State<VaultScreen> with WidgetsBindingObserver {
+  static const int _vaultThumbCacheEntries = 600;
   final VaultService vaultService = VaultService.instance;
+  final LruMap<String, ImageProvider> _vaultThumbCache =
+      LruMap<String, ImageProvider>(_vaultThumbCacheEntries);
   List<VaultItem> _items = [];
   bool _isLoading = true;
   bool _biometricEnabled = false;
@@ -50,14 +55,30 @@ class _VaultScreenState extends State<VaultScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _vaultThumbCache.clear();
     unawaited(vaultService.lock());
     unawaited(ScreenshotProtectionService.setProtected(false));
     super.dispose();
   }
 
+  ImageProvider _vaultThumbProvider(String filePath) {
+    final key = '$filePath@240';
+    return _vaultThumbCache.putIfAbsent(
+      key,
+      () => ResizeImage(
+        FileImage(File(filePath)),
+        width: 240,
+        height: 240,
+      ),
+    );
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) return;
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.resumed) {
+      return;
+    }
     if (!mounted) return;
     Navigator.pop(context, _hasChanged);
   }
@@ -663,8 +684,10 @@ class _VaultScreenState extends State<VaultScreen> with WidgetsBindingObserver {
                                         fit: StackFit.expand,
                                         children: [
                                           item.mediaType == VaultMediaType.photo
-                                              ? Image.file(
-                                                  File(item.vaultPath),
+                                              ? Image(
+                                                  image: _vaultThumbProvider(
+                                                    item.vaultPath,
+                                                  ),
                                                   fit: BoxFit.cover,
                                                 )
                                               : Container(
@@ -822,11 +845,14 @@ class VaultPreviewScreen extends StatefulWidget {
 }
 
 class _VaultPreviewScreenState extends State<VaultPreviewScreen> {
+  static const int _previewImageCacheEntries = 18;
   VideoPlayerController? _videoController;
   ChewieController? _chewieController;
   late PageController _pageController;
   late int currentIndex;
   final ValueNotifier<double> verticalDragNotifier = ValueNotifier<double>(0);
+  final LruMap<String, ImageProvider> _previewImageCache =
+      LruMap<String, ImageProvider>(_previewImageCacheEntries);
 
   double get dismissProgress =>
       (verticalDragNotifier.value / 200).clamp(0.0, 1.0);
@@ -847,7 +873,16 @@ class _VaultPreviewScreenState extends State<VaultPreviewScreen> {
     _videoController?.dispose();
     _pageController.dispose();
     verticalDragNotifier.dispose();
+    _previewImageCache.clear();
     super.dispose();
+  }
+
+  ImageProvider _previewProvider(String filePath) {
+    final key = '$filePath@1200';
+    return _previewImageCache.putIfAbsent(
+      key,
+      () => ResizeImage(FileImage(File(filePath)), width: 1200, height: 1200),
+    );
   }
 
   Future<void> _initializeVideo({String? videoPath}) async {
@@ -929,6 +964,9 @@ class _VaultPreviewScreenState extends State<VaultPreviewScreen> {
               offset: Offset(0, verticalDragNotifier.value),
               child: PageView.builder(
                 controller: _pageController,
+                physics: const FastPageScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
                 onPageChanged: (newIndex) async {
                   setState(() {
                     currentIndex = newIndex;
@@ -943,8 +981,8 @@ class _VaultPreviewScreenState extends State<VaultPreviewScreen> {
                         ? InteractiveViewer(
                             minScale: 1,
                             maxScale: 4,
-                            child: Image.file(
-                              File(item.vaultPath),
+                            child: Image(
+                              image: _previewProvider(item.vaultPath),
                               fit: BoxFit.cover,
                             ),
                           )

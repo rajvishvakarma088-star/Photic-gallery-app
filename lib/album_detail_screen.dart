@@ -11,6 +11,7 @@ import 'services/gallery_service.dart';
 import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
 import 'theme_provider.dart';
+import 'utils/lru_cache.dart';
 import 'video_viewer_screen.dart';
 import 'viewer_screen.dart';
 
@@ -50,7 +51,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   final ScrollController _videoScrollController = ScrollController();
 
   // Shared thumbnail cache keyed by  "${assetId}@${px}"
-  final Map<String, AssetEntityImageProvider> _thumbCache = {};
+  final LruMap<String, AssetEntityImageProvider> _thumbCache =
+      LruMap<String, AssetEntityImageProvider>(_maxThumbCacheEntries);
 
   // Grid-tile GlobalKeys – prefixed with tab index to avoid duplicate-key
   // errors when the same asset appears in both Photos and Videos tabs.
@@ -60,6 +62,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   late List<AssetEntity> albumImages;
   List<AssetEntity> albumVideos = [];
+  int _currentPhotoPage = 0;
+  int _currentVideoPage = -1;
+  bool _hasMorePhotos = true;
+  bool _hasMoreVideos = true;
+  bool _isLoadingMorePhotos = false;
+  bool _isLoadingMoreVideos = false;
 
   int albumGridCount = 3;
   int selectedMediaTab = 0; // 0 = Photos, 1 = Videos
@@ -93,6 +101,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       selectedMediaTab == 0 ? albumImages : albumVideos;
 
   static const int _thumbPx = 180;
+  static const int _pageSize = GalleryService.albumPageSize;
+  static const double _loadMoreThreshold = 1400;
+  static const int _maxThumbCacheEntries = 1800;
 
   // ══════════════════════════════════════════════════════════════════════════
   // Lifecycle
@@ -101,21 +112,42 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   @override
   void initState() {
     super.initState();
-    // Seed with the photos passed in so the grid appears instantly,
-    // then fetch ALL pages in the background (widget.images is capped at 120).
     albumImages = List<AssetEntity>.from(widget.images);
+    _hasMorePhotos = widget.images.length >= _pageSize;
     _photoScrollController.addListener(_onPhotoScroll);
     _videoScrollController.addListener(_onVideoScroll);
-    unawaited(_loadAllAlbumPhotos());
-    unawaited(_loadAllAlbumVideos());
+    unawaited(_syncPhotoPaginationState());
+    unawaited(_loadInitialAlbumVideos());
   }
 
   void _onPhotoScroll() {
-    if (selectedMediaTab == 0) _scheduleThumbnailWarmup();
+    if (selectedMediaTab == 0) {
+      _scheduleThumbnailWarmup();
+    }
+    if (!_photoScrollController.hasClients ||
+        _isLoadingMorePhotos ||
+        !_hasMorePhotos) {
+      return;
+    }
+    final position = _photoScrollController.position;
+    if (position.pixels > position.maxScrollExtent - _loadMoreThreshold) {
+      unawaited(_loadMoreAlbumPhotos());
+    }
   }
 
   void _onVideoScroll() {
-    if (selectedMediaTab == 1) _scheduleThumbnailWarmup();
+    if (selectedMediaTab == 1) {
+      _scheduleThumbnailWarmup();
+    }
+    if (!_videoScrollController.hasClients ||
+        _isLoadingMoreVideos ||
+        !_hasMoreVideos) {
+      return;
+    }
+    final position = _videoScrollController.position;
+    if (position.pixels > position.maxScrollExtent - _loadMoreThreshold) {
+      unawaited(_loadMoreAlbumVideos());
+    }
   }
 
   @override
@@ -175,13 +207,15 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       final asset = assets[i];
       final id = '${asset.id}@$_thumbPx';
       if (!_thumbCache.containsKey(id)) {
-        final provider = AssetEntityImageProvider(
-          asset,
-          isOriginal: false,
-          thumbnailSize: const ThumbnailSize.square(_thumbPx),
-          thumbnailFormat: ThumbnailFormat.jpeg,
+        final provider = _thumbCache.putIfAbsent(
+          id,
+          () => AssetEntityImageProvider(
+            asset,
+            isOriginal: false,
+            thumbnailSize: const ThumbnailSize.square(_thumbPx),
+            thumbnailFormat: ThumbnailFormat.jpeg,
+          ),
         );
-        _thumbCache[id] = provider;
         unawaited(precacheImage(provider, context));
       }
     }
@@ -362,7 +396,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         thumbnailFormat: ThumbnailFormat.jpeg,
       ),
     );
-
     return Image(
       image: provider,
       fit: BoxFit.cover,
@@ -955,34 +988,86 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   // Data loading
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Loads every photo page from the album (replaces the 120-item seed).
-  Future<void> _loadAllAlbumPhotos() async {
-    // Don't show a spinner — we already have the seed from widget.images
-    final all = await service.fetchAllAlbumImages(widget.album);
-    if (!mounted) return;
-    setState(() {
-      albumImages = all;
-    });
-    // Warm thumbnails for the newly loaded items
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _scheduleThumbnailWarmup();
-    });
-  }
-
-  /// Loads every video page from the album.
-  Future<void> _loadAllAlbumVideos() async {
+  Future<void> _loadInitialAlbumVideos() async {
     setState(() => isLoadingVideos = true);
-    final videos = await service.fetchAllAlbumVideos(widget.album);
+    final videos = await service.fetchAlbumVideos(
+      widget.album,
+      page: 0,
+      size: _pageSize,
+    );
     if (!mounted) return;
     setState(() {
       albumVideos = videos;
+      _currentVideoPage = videos.isEmpty ? -1 : 0;
+      _hasMoreVideos = videos.length == _pageSize;
       isLoadingVideos = false;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (selectedMediaTab == 1) _scheduleThumbnailWarmup();
     });
+  }
+
+  Future<void> _syncPhotoPaginationState() async {
+    final count = await widget.album.assetCountAsync;
+    if (!mounted) return;
+    setState(() {
+      _hasMorePhotos = count > albumImages.length;
+    });
+  }
+
+  Future<void> _loadMoreAlbumPhotos() async {
+    if (_isLoadingMorePhotos || !_hasMorePhotos) return;
+    _isLoadingMorePhotos = true;
+    try {
+      final nextPage = _currentPhotoPage + 1;
+      final photos = await service.fetchAlbumImages(
+        widget.album,
+        page: nextPage,
+        size: _pageSize,
+      );
+      if (!mounted) return;
+      setState(() {
+        albumImages.addAll(
+          photos.where((asset) => !albumImages.any((e) => e.id == asset.id)),
+        );
+        _currentPhotoPage = nextPage;
+        _hasMorePhotos = photos.length == _pageSize;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || selectedMediaTab != 0) return;
+        _scheduleThumbnailWarmup();
+      });
+    } finally {
+      _isLoadingMorePhotos = false;
+    }
+  }
+
+  Future<void> _loadMoreAlbumVideos() async {
+    if (_isLoadingMoreVideos || !_hasMoreVideos) return;
+    _isLoadingMoreVideos = true;
+    try {
+      final nextPage = _currentVideoPage + 1;
+      final videos = await service.fetchAlbumVideos(
+        widget.album,
+        page: nextPage,
+        size: _pageSize,
+      );
+      if (!mounted) return;
+      setState(() {
+        albumVideos.addAll(
+          videos.where((asset) => !albumVideos.any((e) => e.id == asset.id)),
+        );
+        _currentVideoPage = nextPage;
+        _hasMoreVideos = videos.length == _pageSize;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || selectedMediaTab != 1) return;
+        _scheduleThumbnailWarmup();
+      });
+    } finally {
+      _isLoadingMoreVideos = false;
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1006,7 +1091,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   Future<void> _showSelectionMenu() async {
     final colorScheme = Theme.of(context).colorScheme;
-    final assets = visibleAssets;
 
     showGeneralDialog(
       context: context,

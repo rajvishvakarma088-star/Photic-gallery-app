@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:path/path.dart' as path;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,7 +7,6 @@ import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'album_detail_screen.dart';
-import 'gallery/gallery_album_widgets.dart' as gallery_album_widgets;
 import 'gallery/gallery_grid_widgets.dart' as gallery_grid_widgets;
 import 'gallery/gallery_section.dart';
 import 'gallery/gallery_section_builder.dart';
@@ -28,6 +26,7 @@ import 'services/audio_player_service.dart';
 import 'mini_music_player.dart';
 import 'music_player_screen.dart';
 import 'search_screen.dart';
+import 'utils/lru_cache.dart';
 
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key});
@@ -72,9 +71,12 @@ class _GalleryScreenState extends State<GalleryScreen>
   int? _dragSelectionStartIndex;
   Set<String>? _dragSelectionInitialIds;
 
-  final Map<String, AssetEntityImageProvider> thumbnailProviderCache = {};
-  final Set<String> warmedThumbnailKeys = {};
-  final Set<String> seenThumbnailAssetIds = {};
+  final LruMap<String, AssetEntityImageProvider> thumbnailProviderCache =
+      LruMap<String, AssetEntityImageProvider>(_maxThumbnailProviderEntries);
+  final LruSet<String> warmedThumbnailKeys =
+      LruSet<String>(_maxWarmThumbnailEntries);
+  final LruSet<String> seenThumbnailAssetIds =
+      LruSet<String>(_maxWarmThumbnailEntries);
 
   bool isLoading = true;
   bool isLoadingVideos = true;
@@ -92,6 +94,8 @@ class _GalleryScreenState extends State<GalleryScreen>
   int currentVideoPage = 0;
   int selectedIndex = 0;
   static const int pageSize = 160;
+  static const int _maxThumbnailProviderEntries = 5000;
+  static const int _maxWarmThumbnailEntries = 12000;
   static const double pinchStepOutThreshold = 1.07;
   static const double pinchStepInThreshold = 0.93;
   static const int pinchStepCooldownMs = 55;
@@ -118,6 +122,9 @@ class _GalleryScreenState extends State<GalleryScreen>
   bool _isVaultEntryPressing = false;
   bool _isOpeningVault = false;
   final Set<AssetEntity> _pendingAssets = {};
+  DateTime? _lastBackgroundedAt;
+  bool _shouldRefreshOnResume = false;
+  static const Duration _resumeRefreshThreshold = Duration(minutes: 2);
 
   bool get _isPinching => _activePointers >= 2;
   bool get isSelectionMode => selectedAssetIds.isNotEmpty;
@@ -136,6 +143,44 @@ class _GalleryScreenState extends State<GalleryScreen>
         _cachedSections != null) {
       return _cachedSections!;
     }
+
+    if (identical(_cachedSectionSource, items) &&
+        _cachedSections != null &&
+        _cachedSectionLength >= 0 &&
+        items.length > _cachedSectionLength) {
+      final appendedItems = items.sublist(_cachedSectionLength);
+      final appendedSections = buildGallerySections(
+        appendedItems,
+        service.resolveAssetDate,
+      );
+      if (appendedSections.isNotEmpty) {
+        final sections = List<GallerySection>.from(_cachedSections!);
+        final lastSection = sections.isNotEmpty ? sections.removeLast() : null;
+        if (lastSection != null) {
+          final firstAppended = appendedSections.first;
+          if (lastSection.title == firstAppended.title) {
+            sections.add(
+              GallerySection(
+                title: lastSection.title,
+                items: [...lastSection.items, ...firstAppended.items],
+              ),
+            );
+            sections.addAll(appendedSections.skip(1));
+          } else {
+            sections
+              ..add(lastSection)
+              ..addAll(appendedSections);
+          }
+        } else {
+          sections.addAll(appendedSections);
+        }
+        _cachedSectionSource = items;
+        _cachedSectionLength = items.length;
+        _cachedSections = sections;
+        return sections;
+      }
+    }
+
     final sections = buildGallerySections(items, service.resolveAssetDate);
 
     _cachedSectionSource = items;
@@ -164,6 +209,8 @@ class _GalleryScreenState extends State<GalleryScreen>
     _dragAutoScrollTimer?.cancel();
     _vaultHoldTimer?.cancel();
     thumbnailProviderCache.clear();
+    warmedThumbnailKeys.clear();
+    seenThumbnailAssetIds.clear();
     _gridTileKeys.clear();
     scrollController.dispose();
     videosScrollController.dispose();
@@ -176,16 +223,45 @@ class _GalleryScreenState extends State<GalleryScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.inactive) {
+      return;
+    }
+
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      _lastBackgroundedAt = DateTime.now();
+      _shouldRefreshOnResume = true;
       unawaited(VaultService.instance.lock());
       return;
     }
+
+    if (state != AppLifecycleState.resumed) {
+      return;
+    }
+
+    if (!_shouldRefreshOnResume) {
+      return;
+    }
+    _shouldRefreshOnResume = false;
+
+    final lastBackgroundedAt = _lastBackgroundedAt;
+    if (lastBackgroundedAt == null ||
+        DateTime.now().difference(lastBackgroundedAt) <
+            _resumeRefreshThreshold) {
+      return;
+    }
+
+    unawaited(_refreshMediaSilentlyAfterResume());
+  }
+
+  Future<void> _refreshMediaSilentlyAfterResume() async {
     service.clearCache();
-    _gridTileKeys.clear();
-    clearSelection();
-    loadFavorites();
-    unawaited(loadRecycleBin());
-    unawaited(loadInitialMediaData());
+    await Future.wait([
+      loadAlbums(permissionOverride: permissionState),
+      loadImages(permissionOverride: permissionState, showLoading: false),
+      loadVideos(permissionOverride: permissionState, showLoading: false),
+      loadFavorites(),
+      loadRecycleBin(),
+    ]);
   }
 
   void _startVaultEntryPress() {
@@ -250,6 +326,9 @@ class _GalleryScreenState extends State<GalleryScreen>
 
   Future<void> loadInitialMediaData() async {
     _gridTileKeys.clear();
+    _cachedSections = null;
+    _cachedSectionSource = null;
+    _cachedSectionLength = -1;
     final permission = await service.requestImagePermission();
     if (!mounted) return;
 
@@ -371,25 +450,6 @@ class _GalleryScreenState extends State<GalleryScreen>
     if (isRecycleActionInProgress) return;
     setState(() {
       if (!selectedAssetIds.add(asset.id)) {
-        selectedAssetIds.remove(asset.id);
-      }
-    });
-  }
-
-  void _applyDragSelection(AssetEntity asset) {
-    final targetValue = _dragSelectionTargetValue;
-    if (targetValue == null || _dragSelectionTouchedIds.contains(asset.id)) {
-      return;
-    }
-
-    _dragSelectionTouchedIds.add(asset.id);
-    final isSelected = selectedAssetIds.contains(asset.id);
-    if (isSelected == targetValue) return;
-
-    setState(() {
-      if (targetValue) {
-        selectedAssetIds.add(asset.id);
-      } else {
         selectedAssetIds.remove(asset.id);
       }
     });
@@ -1867,12 +1927,6 @@ class _GalleryScreenState extends State<GalleryScreen>
 
     setState(() {
       if (loadMore) {
-        // Prepend pending assets if they match the type and are not already present
-        final toPrepend = _pendingAssets.where((a) => 
-          (selectedIndex == 1 ? a.type == AssetType.video : a.type == AssetType.image) &&
-          !data.any((existing) => existing.id == a.id)
-        ).toList();
-        
         images.addAll(data);
         isLoadingMore = false;
         currentPage = resolvedPage;
@@ -1974,12 +2028,6 @@ class _GalleryScreenState extends State<GalleryScreen>
 
     setState(() {
       if (loadMore) {
-        // Prepend pending assets if they match the type and are not already present
-        final toPrepend = _pendingAssets.where((a) => 
-          a.type == AssetType.video &&
-          !data.any((existing) => existing.id == a.id)
-        ).toList();
-        
         videos.addAll(data);
         isLoadingMoreVideos = false;
         currentVideoPage = resolvedPage;

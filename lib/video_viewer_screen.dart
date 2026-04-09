@@ -9,6 +9,7 @@ import 'glass_container.dart';
 import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
 import 'services/favorites_database.dart';
+import 'utils/fast_page_scroll_physics.dart';
 
 class VideoViewerScreen extends StatefulWidget {
   final List<AssetEntity> videos;
@@ -870,6 +871,9 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                         borderRadius: BorderRadius.circular(borderRadius),
                         child: PageView.builder(
                           controller: pageController,
+                          physics: const FastPageScrollPhysics(
+                            parent: BouncingScrollPhysics(),
+                          ),
                           itemCount: widget.videos.length,
                           onPageChanged: (idx) {
                             setState(() {

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'services/music_service.dart';
 import 'services/audio_player_service.dart';
+import 'utils/lru_cache.dart';
 
 class MiniMusicPlayer extends StatefulWidget {
   final AudioPlayerService audioPlayerService;
@@ -21,6 +22,16 @@ class MiniMusicPlayer extends StatefulWidget {
 }
 
 class _MiniMusicPlayerState extends State<MiniMusicPlayer> {
+  static const int _artworkCacheEntries = 80;
+  final LruMap<String, ImageProvider> _artworkCache =
+      LruMap<String, ImageProvider>(_artworkCacheEntries);
+
+  @override
+  void dispose() {
+    _artworkCache.clear();
+    super.dispose();
+  }
+
   Widget _buildArtwork(MusicFile music) {
     Widget fallback = Container(
       decoration: BoxDecoration(
@@ -41,15 +52,37 @@ class _MiniMusicPlayerState extends State<MiniMusicPlayer> {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.done &&
             snapshot.data != null) {
-          return Image.memory(snapshot.data!, fit: BoxFit.cover);
+          final provider = _artworkCache.putIfAbsent(
+            '${music.id}@mini-memory',
+            () => MemoryImage(snapshot.data!),
+          );
+          return Image(image: provider, fit: BoxFit.cover);
         }
         if (music.hasAlbumArt) {
           if (music.albumArtBytes != null) {
-            return Image.memory(music.albumArtBytes!, fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => fallback);
+            final provider = _artworkCache.putIfAbsent(
+              '${music.id}@mini-bytes',
+              () => MemoryImage(music.albumArtBytes!),
+            );
+            return Image(
+              image: provider,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => fallback,
+            );
           } else if (music.albumArtPath != null) {
-            return Image.file(File(music.albumArtPath!), fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => fallback);
+            final provider = _artworkCache.putIfAbsent(
+              '${music.id}@mini-file',
+              () => ResizeImage(
+                FileImage(File(music.albumArtPath!)),
+                width: 180,
+                height: 180,
+              ),
+            );
+            return Image(
+              image: provider,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => fallback,
+            );
           }
         }
         return fallback;

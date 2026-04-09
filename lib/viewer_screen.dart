@@ -16,6 +16,7 @@ import 'glass_container.dart';
 import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
 import 'services/favorites_database.dart';
+import 'utils/fast_page_scroll_physics.dart';
 
 class ViewerScreen extends StatefulWidget {
   final List<AssetEntity> images;
@@ -68,6 +69,13 @@ class _ViewerScreenState extends State<ViewerScreen> {
   Timer? thumbnailStripTimer;
   Timer? deferredNeighborWarmupTimer;
   Timer? _swipeDebounceTimer;
+  Offset? _horizontalSwipeStartPosition;
+  Offset? _horizontalSwipeLatestPosition;
+  DateTime? _horizontalSwipeStartTime;
+  double? _horizontalSwipeStartPage;
+  int? _horizontalSwipePointer;
+  int _activePointerCount = 0;
+  bool _isPageSwipeAnimating = false;
   bool isInteractingWithStrip = false;
   bool _editCompleted = false;
   bool _swipeJustHappened = false; // prevents tap-after-swipe chrome flash
@@ -272,10 +280,106 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   Future<void> animateToViewerPage(int index) async {
-    if (!controller.hasClients || index == currentIndex) return;
+    if (!controller.hasClients ||
+        index == currentIndex ||
+        _isPageSwipeAnimating) {
+      return;
+    }
 
+    _isPageSwipeAnimating = true;
     warmCurrentThenNeighbors(index);
-    controller.jumpToPage(index);
+    try {
+      await controller.animateToPage(
+        index,
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOutCubic,
+      );
+    } finally {
+      _isPageSwipeAnimating = false;
+    }
+  }
+
+  bool get _isViewerZoomed {
+    final scale = photoController.scale ?? 1.0;
+    return scale > 1.02;
+  }
+
+  void _resetHorizontalSwipeTracking({int? pointer}) {
+    if (pointer == null || _horizontalSwipePointer == pointer) {
+      _horizontalSwipePointer = null;
+      _horizontalSwipeStartPosition = null;
+      _horizontalSwipeLatestPosition = null;
+      _horizontalSwipeStartTime = null;
+      _horizontalSwipeStartPage = null;
+    }
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    _activePointerCount += 1;
+    if (_activePointerCount != 1 || showDetails || _isViewerZoomed) return;
+
+    _horizontalSwipePointer = event.pointer;
+    _horizontalSwipeStartPosition = event.position;
+    _horizontalSwipeLatestPosition = event.position;
+    _horizontalSwipeStartTime = DateTime.now();
+    _horizontalSwipeStartPage = controller.hasClients ? controller.page : null;
+  }
+
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (_horizontalSwipePointer != event.pointer || _activePointerCount != 1) {
+      return;
+    }
+    _horizontalSwipeLatestPosition = event.position;
+  }
+
+  void _handlePointerCancel(PointerCancelEvent event) {
+    _activePointerCount = (_activePointerCount - 1).clamp(0, 99);
+    _resetHorizontalSwipeTracking(pointer: event.pointer);
+  }
+
+  void _handlePointerUp(PointerUpEvent event) {
+    final wasTrackedPointer = _horizontalSwipePointer == event.pointer;
+    final start = _horizontalSwipeStartPosition;
+    final end = _horizontalSwipeLatestPosition ?? event.position;
+    final startTime = _horizontalSwipeStartTime;
+    final startPage = _horizontalSwipeStartPage;
+
+    _activePointerCount = (_activePointerCount - 1).clamp(0, 99);
+    _resetHorizontalSwipeTracking(pointer: event.pointer);
+
+    if (!wasTrackedPointer ||
+        start == null ||
+        startTime == null ||
+        showDetails ||
+        _isViewerZoomed ||
+        _isPageSwipeAnimating) {
+      return;
+    }
+
+    final dx = end.dx - start.dx;
+    final dy = end.dy - start.dy;
+    final elapsedMs = DateTime.now().difference(startTime).inMilliseconds;
+    final safeElapsedMs = elapsedMs <= 0 ? 1 : elapsedMs;
+    final velocityX = dx / safeElapsedMs;
+    final movedHorizontally = dx.abs() > 26;
+    final fastHorizontalFling = velocityX.abs() > 0.42;
+    final isHorizontalIntent = dx.abs() > (dy.abs() * 1.2);
+    final pageStayedMostlyStill =
+        startPage == null ||
+        !controller.hasClients ||
+        ((controller.page ?? currentIndex.toDouble()) - startPage).abs() < 0.08;
+
+    if ((!movedHorizontally && !fastHorizontalFling) ||
+        !isHorizontalIntent ||
+        !pageStayedMostlyStill) {
+      return;
+    }
+
+    if (dx < 0 && currentIndex < widget.images.length - 1) {
+      animateToViewerPage(currentIndex + 1);
+    } else if (dx > 0 && currentIndex > 0) {
+      animateToViewerPage(currentIndex - 1);
+    }
   }
 
   String formatDate(DateTime date) {
@@ -326,7 +430,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
     scheduleMicrotask(() async {
       if (!mounted) return;
       precacheViewerImage(currentIndex);
-      final favorited = await favoritesDatabase.isFavorite(widget.images[currentIndex].id);
+      final favorited = await favoritesDatabase.isFavorite(
+        widget.images[currentIndex].id,
+      );
       if (mounted) {
         setState(() {
           isFavorite = favorited;
@@ -363,7 +469,6 @@ class _ViewerScreenState extends State<ViewerScreen> {
     super.dispose();
   }
 
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -377,307 +482,342 @@ class _ViewerScreenState extends State<ViewerScreen> {
         Navigator.pop(context, res);
       },
       child: Scaffold(
-      backgroundColor: Colors.transparent,
-      extendBodyBehindAppBar: true,
+        backgroundColor: Colors.transparent,
+        extendBodyBehindAppBar: true,
 
-      body: Stack(
-        children: [
-          // 🌈 DYNAMIC BACKGROUND
-          ValueListenableBuilder<double>(
-            valueListenable: verticalDragNotifier,
-            builder: (context, verticalDrag, _) {
-              final dismissProgress = (verticalDrag / 220).clamp(0.0, 1.0);
-              return Container(
-                color: (isDark ? Colors.black : Colors.white).withOpacity(
-                  (1.0 - dismissProgress).clamp(0.0, 1.0),
-                ),
-              );
-            },
-          ),
+        body: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: _handlePointerDown,
+          onPointerMove: _handlePointerMove,
+          onPointerUp: _handlePointerUp,
+          onPointerCancel: _handlePointerCancel,
+          child: Stack(
+            children: [
+              // 🌈 DYNAMIC BACKGROUND
+              ValueListenableBuilder<double>(
+                valueListenable: verticalDragNotifier,
+                builder: (context, verticalDrag, _) {
+                  final dismissProgress = (verticalDrag / 220).clamp(0.0, 1.0);
+                  return Container(
+                    color: (isDark ? Colors.black : Colors.white).withOpacity(
+                      (1.0 - dismissProgress).clamp(0.0, 1.0),
+                    ),
+                  );
+                },
+              ),
 
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              // Ignore taps that are actually swipe-ends
-              if (_swipeJustHappened) return;
-              if (showDetails) {
-                closeDetails();
-              } else {
-                setState(() {
-                  showViewerChrome = !showViewerChrome;
-                });
-              }
-            },
-            child: Stack(
-              children: [
-                // 🖼️ IMAGE VIEW
-                GestureDetector(
-                  onLongPress: () => showContextMenu(isDark),
-                  onVerticalDragUpdate: (details) {
-                    if (details.delta.dy < 0 && !showDetails) {
-                      upwardDragNotifier.value =
-                          (upwardDragNotifier.value + (-details.delta.dy))
-                              .clamp(0.0, 160.0);
-                      return;
-                    }
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  // Ignore taps that are actually swipe-ends
+                  if (_swipeJustHappened) return;
+                  if (showDetails) {
+                    closeDetails();
+                  } else {
+                    setState(() {
+                      showViewerChrome = !showViewerChrome;
+                    });
+                  }
+                },
+                child: Stack(
+                  children: [
+                    // 🖼️ IMAGE VIEW
+                    GestureDetector(
+                      onLongPress: () => showContextMenu(isDark),
+                      onVerticalDragUpdate: (details) {
+                        if (details.delta.dy < 0 && !showDetails) {
+                          upwardDragNotifier.value =
+                              (upwardDragNotifier.value + (-details.delta.dy))
+                                  .clamp(0.0, 160.0);
+                          return;
+                        }
 
-                    final newDrag =
-                        verticalDragNotifier.value + details.delta.dy;
-                    if (newDrag > 0 && !showDetails) {
-                      verticalDragNotifier.value =
-                          (verticalDragNotifier.value +
-                                  (details.delta.dy * 0.72))
-                              .clamp(0.0, 260.0);
-                    }
-                  },
-                  onVerticalDragEnd: (details) {
-                    final velocity = details.primaryVelocity ?? 0;
-                    final verticalDrag = verticalDragNotifier.value;
-                    final upwardDrag = upwardDragNotifier.value;
+                        final newDrag =
+                            verticalDragNotifier.value + details.delta.dy;
+                        if (newDrag > 0 && !showDetails) {
+                          verticalDragNotifier.value =
+                              (verticalDragNotifier.value +
+                                      (details.delta.dy * 0.72))
+                                  .clamp(0.0, 260.0);
+                        }
+                      },
+                      onVerticalDragEnd: (details) {
+                        final velocity = details.primaryVelocity ?? 0;
+                        final verticalDrag = verticalDragNotifier.value;
+                        final upwardDrag = upwardDragNotifier.value;
 
-                    if (verticalDrag > 150 || velocity > 700) {
-                      HapticFeedback.mediumImpact();
-                      Navigator.pop(context, _newAssetPostEdit ?? (_editCompleted ? 'edited' : null));
-                    } else if (velocity < -140 || upwardDrag > 60) {
-                      HapticFeedback.mediumImpact();
-                      openDetails();
-                    } else {
-                      verticalDragNotifier.value = 0;
-                      upwardDragNotifier.value = 0;
-                    }
-                  },
-                  child: RepaintBoundary(
-                    child: ValueListenableBuilder<double>(
-                      valueListenable: verticalDragNotifier,
-                      builder: (context, verticalDrag, _) {
-                        return ValueListenableBuilder<double>(
-                          valueListenable: upwardDragNotifier,
-                          builder: (context, upwardDrag, __) {
-                            final totalDrag = verticalDrag + upwardDrag;
-                            final scale = (1.0 - (totalDrag / 1000)).clamp(
-                              0.65,
-                              1.0,
-                            );
-                            final borderRadius = (1.0 - scale) * 100;
+                        if (verticalDrag > 150 || velocity > 700) {
+                          HapticFeedback.mediumImpact();
+                          Navigator.pop(
+                            context,
+                            _newAssetPostEdit ??
+                                (_editCompleted ? 'edited' : null),
+                          );
+                        } else if (velocity < -140 || upwardDrag > 60) {
+                          HapticFeedback.mediumImpact();
+                          openDetails();
+                        } else {
+                          verticalDragNotifier.value = 0;
+                          upwardDragNotifier.value = 0;
+                        }
+                      },
+                      child: RepaintBoundary(
+                        child: ValueListenableBuilder<double>(
+                          valueListenable: verticalDragNotifier,
+                          builder: (context, verticalDrag, _) {
+                            return ValueListenableBuilder<double>(
+                              valueListenable: upwardDragNotifier,
+                              builder: (context, upwardDrag, __) {
+                                final totalDrag = verticalDrag + upwardDrag;
+                                final scale = (1.0 - (totalDrag / 1000)).clamp(
+                                  0.65,
+                                  1.0,
+                                );
+                                final borderRadius = (1.0 - scale) * 100;
 
-                            return Transform.translate(
-                              offset: Offset(
-                                0,
-                                verticalDrag - (upwardDrag * 0.22),
-                              ),
-                              child: Transform.scale(
-                                scale: scale,
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(
-                                    borderRadius,
+                                return Transform.translate(
+                                  offset: Offset(
+                                    0,
+                                    verticalDrag - (upwardDrag * 0.22),
                                   ),
-                                  child: PhotoViewGallery.builder(
-                                    pageController: controller,
-                                    itemCount: widget.images.length,
-                                    backgroundDecoration: const BoxDecoration(
-                                      color: Colors.transparent,
+                                  child: Transform.scale(
+                                    scale: scale,
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(
+                                        borderRadius,
+                                      ),
+                                      child: PhotoViewGallery.builder(
+                                        pageController: controller,
+                                        scrollPhysics:
+                                            const FastPageScrollPhysics(
+                                              parent: BouncingScrollPhysics(),
+                                            ),
+                                        itemCount: widget.images.length,
+                                        backgroundDecoration:
+                                            const BoxDecoration(
+                                              color: Colors.transparent,
+                                            ),
+                                        onPageChanged: (index) async {
+                                          currentIndex = index;
+                                          currentIndexNotifier.value = index;
+                                          warmCurrentThenNeighbors(index);
+                                          // Swipe → show strip + restore chrome
+                                          showThumbnailStripTemporarily();
+                                          if (!showViewerChrome) {
+                                            setState(
+                                              () => showViewerChrome = true,
+                                            );
+                                          }
+                                          syncThumbnailStrip();
+
+                                          final favorited =
+                                              await favoritesDatabase
+                                                  .isFavorite(
+                                                    widget.images[index].id,
+                                                  );
+                                          if (mounted &&
+                                              currentIndex == index) {
+                                            setState(() {
+                                              isFavorite = favorited;
+                                            });
+                                          }
+
+                                          // Debounce: ignore the tap that fires
+                                          // immediately after a swipe ends
+                                          _swipeJustHappened = true;
+                                          _swipeDebounceTimer?.cancel();
+                                          _swipeDebounceTimer = Timer(
+                                            const Duration(milliseconds: 350),
+                                            () => _swipeJustHappened = false,
+                                          );
+                                        },
+                                        loadingBuilder: (context, event) =>
+                                            const SizedBox(),
+                                        builder: (context, index) {
+                                          final asset = widget.images[index];
+                                          return PhotoViewGalleryPageOptions(
+                                            controller: photoController,
+                                            imageProvider:
+                                                currentPageImageProvider(
+                                                  asset,
+                                                  index,
+                                                ),
+                                            heroAttributes:
+                                                PhotoViewHeroAttributes(
+                                                  tag: asset.id,
+                                                ),
+                                            minScale: PhotoViewComputedScale
+                                                .contained,
+                                            initialScale: PhotoViewComputedScale
+                                                .contained,
+                                            maxScale:
+                                                PhotoViewComputedScale.covered *
+                                                2.4,
+                                            filterQuality: FilterQuality.low,
+                                          );
+                                        },
+                                      ),
                                     ),
-                                    onPageChanged: (index) async {
-                                      currentIndex = index;
-                                      currentIndexNotifier.value = index;
-                                      warmCurrentThenNeighbors(index);
-                                      // Swipe → show strip + restore chrome
-                                      showThumbnailStripTemporarily();
-                                      if (!showViewerChrome) {
-                                        setState(() => showViewerChrome = true);
-                                      }
-                                      syncThumbnailStrip();
-
-                                      final favorited = await favoritesDatabase.isFavorite(widget.images[index].id);
-                                      if (mounted && currentIndex == index) {
-                                        setState(() {
-                                          isFavorite = favorited;
-                                        });
-                                      }
-
-                                      // Debounce: ignore the tap that fires
-                                      // immediately after a swipe ends
-                                      _swipeJustHappened = true;
-                                      _swipeDebounceTimer?.cancel();
-                                      _swipeDebounceTimer = Timer(
-                                        const Duration(milliseconds: 350),
-                                        () => _swipeJustHappened = false,
-                                      );
-                                    },
-                                    loadingBuilder: (context, event) =>
-                                        const SizedBox(),
-                                    builder: (context, index) {
-                                      final asset = widget.images[index];
-                                      return PhotoViewGalleryPageOptions(
-                                        controller: photoController,
-                                        imageProvider: currentPageImageProvider(
-                                          asset,
-                                          index,
-                                        ),
-                                        heroAttributes: PhotoViewHeroAttributes(
-                                          tag: asset.id,
-                                        ),
-                                        minScale:
-                                            PhotoViewComputedScale.contained,
-                                        initialScale:
-                                            PhotoViewComputedScale.contained,
-                                        maxScale:
-                                            PhotoViewComputedScale.covered *
-                                            2.4,
-                                        filterQuality: FilterQuality.low,
-                                      );
-                                    },
                                   ),
-                                ),
-                              ),
+                                );
+                              },
                             );
                           },
-                        );
-                      },
-                    ),
-                  ),
-                ),
-
-                // 🔙 MENU BUTTON
-                if (showViewerChrome)
-                  Positioned(
-                    top: 50,
-                    right: 20,
-                    child: ValueListenableBuilder<double>(
-                      valueListenable: verticalDragNotifier,
-                      builder: (context, drag, child) {
-                        return AnimatedOpacity(
-                          duration: const Duration(milliseconds: 100),
-                          opacity: drag > 20 ? 0 : 1.0,
-                          child: child,
-                        );
-                      },
-                      child: glassButton(
-                        icon: Icons.more_vert_rounded,
-                        isDark: isDark,
-                        onTap: () => showContextMenu(isDark),
-                      ),
-                    ),
-                  ),
-
-                // 🔙 BACK BUTTON
-                if (showViewerChrome)
-                  Positioned(
-                    top: 50,
-                    left: 20,
-                    child: ValueListenableBuilder<double>(
-                      valueListenable: verticalDragNotifier,
-                      builder: (context, drag, child) {
-                        return AnimatedOpacity(
-                          duration: const Duration(milliseconds: 100),
-                          opacity: drag > 20 ? 0 : 1.0,
-                          child: child,
-                        );
-                      },
-                      child: glassButton(
-                        icon: Icons.arrow_back,
-                        isDark: isDark,
-                        onTap: () => Navigator.pop(context, _newAssetPostEdit ?? (_editCompleted ? 'edited' : null)),
-                      ),
-                    ),
-                  ),
-
-                if (showViewerChrome)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 106 + MediaQuery.of(context).padding.bottom,
-                    child: IgnorePointer(
-                      ignoring: showDetails,
-                      child: AnimatedSlide(
-                        duration: const Duration(milliseconds: 320),
-                        curve: Curves.easeOutCubic,
-                        offset: showDetails
-                            ? const Offset(0, 1.2)
-                            : showThumbnailStrip
-                            ? Offset.zero
-                            : const Offset(0, 0.9),
-                        child: AnimatedOpacity(
-                          duration: const Duration(milliseconds: 220),
-                          opacity:
-                              showDetails ||
-                                  !showThumbnailStrip ||
-                                  !showViewerChrome
-                              ? 0
-                              : 1,
-                          child: ValueListenableBuilder<int>(
-                            valueListenable: currentIndexNotifier,
-                            builder: (context, _, __) {
-                              return buildThumbnailStrip(isDark);
-                            },
-                          ),
                         ),
                       ),
                     ),
-                  ),
 
-                if (showViewerChrome)
-                  Positioned(
-                    left: 16,
-                    right: 16,
-                    bottom: 2 + MediaQuery.of(context).padding.bottom,
-                    child: IgnorePointer(
-                      ignoring: showDetails,
-                      child: AnimatedSlide(
-                        duration: const Duration(milliseconds: 320),
-                        curve: Curves.easeOutCubic,
-                        offset: showDetails ? const Offset(0, 2) : Offset.zero,
-                        child: AnimatedOpacity(
-                          duration: const Duration(milliseconds: 220),
-                          opacity: showDetails || !showViewerChrome ? 0 : 1,
-                          child: ValueListenableBuilder<double>(
-                            valueListenable: verticalDragNotifier,
-                            builder: (context, drag, child) {
-                              return AnimatedOpacity(
-                                duration: const Duration(milliseconds: 100),
-                                opacity: drag > 20 ? 0 : 1.0,
-                                child: child,
-                              );
-                            },
-                            child: buildQuickActionBar(isDark),
+                    // 🔙 MENU BUTTON
+                    if (showViewerChrome)
+                      Positioned(
+                        top: 50,
+                        right: 20,
+                        child: ValueListenableBuilder<double>(
+                          valueListenable: verticalDragNotifier,
+                          builder: (context, drag, child) {
+                            return AnimatedOpacity(
+                              duration: const Duration(milliseconds: 100),
+                              opacity: drag > 20 ? 0 : 1.0,
+                              child: child,
+                            );
+                          },
+                          child: glassButton(
+                            icon: Icons.more_vert_rounded,
+                            isDark: isDark,
+                            onTap: () => showContextMenu(isDark),
                           ),
                         ),
                       ),
-                    ),
-                  ),
 
-                if (showViewerChrome)
-                  Positioned(
-                    right: 12,
-                    bottom: 117 + MediaQuery.of(context).padding.bottom,
-                    child: IgnorePointer(
-                      ignoring: showDetails,
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 220),
-                        opacity: showDetails || !showViewerChrome ? 0 : 1,
-                        child: buildThumbnailStripToggle(isDark),
+                    // 🔙 BACK BUTTON
+                    if (showViewerChrome)
+                      Positioned(
+                        top: 50,
+                        left: 20,
+                        child: ValueListenableBuilder<double>(
+                          valueListenable: verticalDragNotifier,
+                          builder: (context, drag, child) {
+                            return AnimatedOpacity(
+                              duration: const Duration(milliseconds: 100),
+                              opacity: drag > 20 ? 0 : 1.0,
+                              child: child,
+                            );
+                          },
+                          child: glassButton(
+                            icon: Icons.arrow_back,
+                            isDark: isDark,
+                            onTap: () => Navigator.pop(
+                              context,
+                              _newAssetPostEdit ??
+                                  (_editCompleted ? 'edited' : null),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    if (showViewerChrome)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 106 + MediaQuery.of(context).padding.bottom,
+                        child: IgnorePointer(
+                          ignoring: showDetails,
+                          child: AnimatedSlide(
+                            duration: const Duration(milliseconds: 320),
+                            curve: Curves.easeOutCubic,
+                            offset: showDetails
+                                ? const Offset(0, 1.2)
+                                : showThumbnailStrip
+                                ? Offset.zero
+                                : const Offset(0, 0.9),
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 220),
+                              opacity:
+                                  showDetails ||
+                                      !showThumbnailStrip ||
+                                      !showViewerChrome
+                                  ? 0
+                                  : 1,
+                              child: ValueListenableBuilder<int>(
+                                valueListenable: currentIndexNotifier,
+                                builder: (context, _, __) {
+                                  return buildThumbnailStrip(isDark);
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    if (showViewerChrome)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: 2 + MediaQuery.of(context).padding.bottom,
+                        child: IgnorePointer(
+                          ignoring: showDetails,
+                          child: AnimatedSlide(
+                            duration: const Duration(milliseconds: 320),
+                            curve: Curves.easeOutCubic,
+                            offset: showDetails
+                                ? const Offset(0, 2)
+                                : Offset.zero,
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 220),
+                              opacity: showDetails || !showViewerChrome ? 0 : 1,
+                              child: ValueListenableBuilder<double>(
+                                valueListenable: verticalDragNotifier,
+                                builder: (context, drag, child) {
+                                  return AnimatedOpacity(
+                                    duration: const Duration(milliseconds: 100),
+                                    opacity: drag > 20 ? 0 : 1.0,
+                                    child: child,
+                                  );
+                                },
+                                child: buildQuickActionBar(isDark),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    if (showViewerChrome)
+                      Positioned(
+                        right: 12,
+                        bottom: 117 + MediaQuery.of(context).padding.bottom,
+                        child: IgnorePointer(
+                          ignoring: showDetails,
+                          child: AnimatedOpacity(
+                            duration: const Duration(milliseconds: 220),
+                            opacity: showDetails || !showViewerChrome ? 0 : 1,
+                            child: buildThumbnailStripToggle(isDark),
+                          ),
+                        ),
+                      ),
+
+                    // 📊 DETAILS PANEL
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: ValueListenableBuilder<int>(
+                        valueListenable: currentIndexNotifier,
+                        builder: (context, index, _) {
+                          return buildDetailsPanel(
+                            widget.images[index],
+                            isDark,
+                          );
+                        },
                       ),
                     ),
-                  ),
-
-                // 📊 DETAILS PANEL
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: ValueListenableBuilder<int>(
-                    valueListenable: currentIndexNotifier,
-                    builder: (context, index, _) {
-                      return buildDetailsPanel(widget.images[index], isDark);
-                    },
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
-    ),);
+    );
   }
 
   Widget buildThumbnailStrip(bool isDark) {
@@ -799,7 +939,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
             _actionIcon(Icons.share_rounded, isDark, shareAsset),
             _actionIcon(Icons.edit_rounded, isDark, editAsset),
             _actionIcon(
-              isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+              isFavorite
+                  ? Icons.favorite_rounded
+                  : Icons.favorite_border_rounded,
               isDark,
               toggleFavorite,
               color: isFavorite ? const Color(0xFFE66A74) : null,
@@ -812,11 +954,19 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
-  Widget _actionIcon(IconData icon, bool isDark, VoidCallback onTap, {Color? color}) {
+  Widget _actionIcon(
+    IconData icon,
+    bool isDark,
+    VoidCallback onTap, {
+    Color? color,
+  }) {
     return IconButton(
       iconSize: 28,
       padding: EdgeInsets.zero,
-      icon: Icon(icon, color: color ?? (isDark ? Colors.white : Colors.black87)),
+      icon: Icon(
+        icon,
+        color: color ?? (isDark ? Colors.white : Colors.black87),
+      ),
       onPressed: onTap,
     );
   }
@@ -824,7 +974,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   Future<void> toggleFavorite() async {
     final asset = widget.images[currentIndex];
     final newState = !isFavorite;
-    
+
     // Optimistic UI update
     setState(() {
       isFavorite = newState;
@@ -892,18 +1042,21 @@ class _ViewerScreenState extends State<ViewerScreen> {
               try {
                 final tempDir = await getTemporaryDirectory();
                 final String originalName = asset.title ?? 'image';
-                final String extension = path.extension(file.path).isEmpty ? '.jpg' : path.extension(file.path);
-                final String baseName = path.basenameWithoutExtension(originalName);
-                final String newFileName = '${baseName}_edited_${DateTime.now().millisecondsSinceEpoch}$extension';
-                final File tempFile = File('${tempDir.path}/$newFileName');
-                
-                await tempFile.writeAsBytes(bytes);
-                
-                final AssetEntity? result = await PhotoManager.editor.saveImageWithPath(
-                  tempFile.path,
-                  title: newFileName,
+                final String extension = path.extension(file.path).isEmpty
+                    ? '.jpg'
+                    : path.extension(file.path);
+                final String baseName = path.basenameWithoutExtension(
+                  originalName,
                 );
-                
+                final String newFileName =
+                    '${baseName}_edited_${DateTime.now().millisecondsSinceEpoch}$extension';
+                final File tempFile = File('${tempDir.path}/$newFileName');
+
+                await tempFile.writeAsBytes(bytes);
+
+                final AssetEntity? result = await PhotoManager.editor
+                    .saveImageWithPath(tempFile.path, title: newFileName);
+
                 if (result != null) {
                   _editCompleted = true;
                   _newAssetPostEdit = result;
@@ -1043,7 +1196,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
     if (file == null || !mounted) return;
 
     final currentName = path.basename(file.path);
-    final ext = path.extension(currentName);        // e.g. ".jpg"
+    final ext = path.extension(currentName); // e.g. ".jpg"
     final baseName = path.basenameWithoutExtension(currentName);
     final nameCtrl = TextEditingController(text: baseName);
 
@@ -1148,8 +1301,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
       _showViewerSnackBar('Renaming...');
       // Pass asset ID directly — avoids unreliable DATA column query on Android 11+
       await _renameChannel.invokeMethod('renameFile', {
-        'assetId': asset.id,        // MediaStore _ID
-        'assetType': assetTypeInt,  // 1=image, 2=video, 3=audio
+        'assetId': asset.id, // MediaStore _ID
+        'assetType': assetTypeInt, // 1=image, 2=video, 3=audio
         'newName': newTitle,
       });
       if (!mounted) return;
@@ -1159,11 +1312,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
     } catch (e) {
       if (mounted) _showViewerSnackBar('Rename failed: $e');
     }
-
   }
 
   // ── Rename + Wallpaper channels ──────────────────────────────────
-  static const _renameChannel   = MethodChannel('com.rajappppp/rename');
+  static const _renameChannel = MethodChannel('com.rajappppp/rename');
   static const _wallpaperChannel = MethodChannel('com.rajappppp/wallpaper');
 
   Future<void> _setWallpaper(int which) async {
@@ -1410,14 +1562,14 @@ class _ViewerScreenState extends State<ViewerScreen> {
       transitionDuration: const Duration(milliseconds: 240),
       transitionBuilder: (context, animation, secondaryAnimation, child) {
         final curve = Curves.easeOutBack;
-        final curvedAnimation = CurvedAnimation(parent: animation, curve: curve);
+        final curvedAnimation = CurvedAnimation(
+          parent: animation,
+          curve: curve,
+        );
         return ScaleTransition(
           scale: Tween<double>(begin: 0.8, end: 1.0).animate(curvedAnimation),
           alignment: Alignment.topRight,
-          child: FadeTransition(
-            opacity: animation,
-            child: child,
-          ),
+          child: FadeTransition(opacity: animation, child: child),
         );
       },
       pageBuilder: (dialogContext, animation, secondaryAnimation) {
@@ -1510,7 +1662,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
                             },
                           ),
                           Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
                             child: Divider(
                               color: textColor.withValues(alpha: 0.12),
                               height: 1,
@@ -1573,7 +1728,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
             Icon(
               icon,
               size: 21,
-              color: isDestructive ? accentColor : accentColor.withValues(alpha: 0.78),
+              color: isDestructive
+                  ? accentColor
+                  : accentColor.withValues(alpha: 0.78),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -1703,7 +1860,6 @@ class _ViewerScreenState extends State<ViewerScreen> {
       child: child,
     );
   }
-
 
   Widget buildThumbnailStripToggle(bool isDark) {
     return GestureDetector(

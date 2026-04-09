@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'services/gallery_service.dart';
-import 'glass_container.dart';
-import 'viewer_screen.dart';
-import 'video_viewer_screen.dart';
+
 import 'gallery/gallery_grid_widgets.dart' as grid_widgets;
+import 'glass_container.dart';
+import 'services/gallery_service.dart';
+import 'utils/lru_cache.dart';
+import 'video_viewer_screen.dart';
+import 'viewer_screen.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -19,16 +21,30 @@ class SearchScreen extends StatefulWidget {
 }
 
 class _SearchScreenState extends State<SearchScreen> {
+  static const int _pageSize = GalleryService.mediaPageSize;
+  static const int _resultTarget = 90;
+  static const int _maxThumbCacheEntries = 1200;
+
   final GalleryService _service = GalleryService();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
-  
-  List<AssetEntity> _allAssets = [];
+  final ScrollController _resultsScrollController = ScrollController();
+  final LruMap<String, AssetEntityImageProvider> _thumbnailProviders =
+      LruMap<String, AssetEntityImageProvider>(_maxThumbCacheEntries);
+
+  final List<AssetEntity> _loadedAssets = [];
   List<AssetEntity> _filteredAssets = [];
   List<String> _recentSearches = [];
+  Timer? _searchDebounce;
+
   String _currentQuery = '';
-  
-  final List<Map<String, dynamic>> _quickFilters = [
+  int _nextPage = 0;
+  bool _isLoadingInitial = true;
+  bool _isLoadingMore = false;
+  bool _isScanningQuery = false;
+  bool _hasMoreAssets = true;
+
+  final List<Map<String, dynamic>> _quickFilters = const [
     {'label': 'Camera', 'icon': Icons.camera_alt_rounded},
     {'label': 'Downloads', 'icon': Icons.download_rounded},
     {'label': 'Screenshots', 'icon': Icons.screenshot_rounded},
@@ -38,103 +54,262 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   void initState() {
     super.initState();
-    _loadInitialData();
+    _resultsScrollController.addListener(_onResultsScroll);
     _loadRecentSearches();
+    unawaited(_loadNextPage(showInitialLoading: true));
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       _focusNode.requestFocus();
     });
   }
 
-  Future<void> _loadInitialData() async {
-    final assets = await _service.fetchAllAssets();
-    if (mounted) {
-      setState(() {
-        _allAssets = assets;
-        _filteredAssets = assets;
-      });
-    }
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    _focusNode.dispose();
+    _resultsScrollController.dispose();
+    _thumbnailProviders.clear();
+    super.dispose();
   }
 
   Future<void> _loadRecentSearches() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     setState(() {
       _recentSearches = prefs.getStringList('recent_searches') ?? [];
     });
   }
 
   Future<void> _saveSearch(String query) async {
-    if (query.trim().isEmpty) return;
+    final normalized = query.trim();
+    if (normalized.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     final searches = prefs.getStringList('recent_searches') ?? [];
-    searches.remove(query);
-    searches.insert(0, query);
+    searches.remove(normalized);
+    searches.insert(0, normalized);
     if (searches.length > 5) searches.removeLast();
     await prefs.setStringList('recent_searches', searches);
-    _loadRecentSearches();
+    unawaited(_loadRecentSearches());
+  }
+
+  Future<void> _loadNextPage({bool showInitialLoading = false}) async {
+    if (_isLoadingMore || !_hasMoreAssets) return;
+
+    setState(() {
+      if (showInitialLoading) {
+        _isLoadingInitial = true;
+      } else {
+        _isLoadingMore = true;
+      }
+    });
+
+    try {
+      final assets = await _service.fetchAssetsPage(
+        page: _nextPage,
+        size: _pageSize,
+      );
+      if (!mounted) return;
+
+      final existingIds = _loadedAssets.map((asset) => asset.id).toSet();
+      final uniqueAssets = assets
+          .where((asset) => !existingIds.contains(asset.id))
+          .toList(growable: false);
+
+      _loadedAssets.addAll(uniqueAssets);
+      _nextPage++;
+      _hasMoreAssets = assets.length == _pageSize;
+
+      if (_currentQuery.trim().isNotEmpty) {
+        _applyQuery(_currentQuery, scanUntilEnough: false);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingInitial = false;
+          _isLoadingMore = false;
+        });
+      }
+    }
+  }
+
+  void _onResultsScroll() {
+    if (!_resultsScrollController.hasClients ||
+        _isLoadingMore ||
+        _currentQuery.trim().isEmpty) {
+      return;
+    }
+
+    final position = _resultsScrollController.position;
+    if (position.pixels > position.maxScrollExtent - 900) {
+      if (_hasMoreAssets) {
+        unawaited(_progressivelyScanForQuery(_currentQuery.trim()));
+      }
+    }
+  }
+
+  bool _matchesQuery(AssetEntity asset, String lowerQuery) {
+    if (lowerQuery.isEmpty) return false;
+    if (lowerQuery == 'videos') return asset.type == AssetType.video;
+
+    final title = asset.title?.toLowerCase() ?? '';
+    final relativePath = asset.relativePath?.toLowerCase() ?? '';
+    if (title.contains(lowerQuery) || relativePath.contains(lowerQuery)) {
+      return true;
+    }
+
+    if (lowerQuery == 'camera' && relativePath.contains('dcim')) return true;
+    if (lowerQuery == 'downloads' && relativePath.contains('download')) {
+      return true;
+    }
+    if (lowerQuery == 'screenshots' && relativePath.contains('screenshot')) {
+      return true;
+    }
+    return false;
+  }
+
+  void _applyQuery(String rawQuery, {required bool scanUntilEnough}) {
+    final query = rawQuery.trim().toLowerCase();
+    if (!mounted) return;
+
+    if (query.isEmpty) {
+      setState(() {
+        _currentQuery = '';
+        _filteredAssets = [];
+        _isScanningQuery = false;
+      });
+      return;
+    }
+
+    final filtered = _loadedAssets
+        .where((asset) => _matchesQuery(asset, query))
+        .toList(growable: false);
+
+    setState(() {
+      _currentQuery = rawQuery;
+      _filteredAssets = filtered;
+    });
+
+    if (scanUntilEnough) {
+      unawaited(_progressivelyScanForQuery(rawQuery));
+    }
+  }
+
+  Future<void> _progressivelyScanForQuery(String rawQuery) async {
+    final normalized = rawQuery.trim().toLowerCase();
+    if (normalized.isEmpty || _isScanningQuery) return;
+
+    _isScanningQuery = true;
+    if (mounted) {
+      setState(() {});
+    }
+
+    try {
+      while (mounted &&
+          _currentQuery.trim().toLowerCase() == normalized &&
+          _hasMoreAssets &&
+          _filteredAssets.length < _resultTarget) {
+        await _loadNextPage();
+      }
+    } finally {
+      _isScanningQuery = false;
+      if (mounted) {
+        setState(() {});
+      }
+    }
   }
 
   void _onSearchChanged(String query) {
-    setState(() {
-      _currentQuery = query;
-      if (query.isEmpty) {
-        _filteredAssets = _allAssets;
-      } else {
-        final lowerQuery = query.toLowerCase();
-        
-        // Spec: match Name, Folder, or File type
-        _filteredAssets = _allAssets.where((asset) {
-          // Special case for "Videos" chip/search
-          if (lowerQuery == 'videos' && asset.type == AssetType.video) return true;
-          
-          final titleMatch = asset.title?.toLowerCase().contains(lowerQuery) ?? false;
-          final pathMatch = asset.relativePath?.toLowerCase().contains(lowerQuery) ?? false;
-          
-          // For chips like "Camera", "Screenshots", "Downloads", ensure we match the folder
-          if (lowerQuery == 'camera' && (pathMatch || (asset.relativePath?.contains('DCIM') ?? false))) return true;
-          if (lowerQuery == 'downloads' && (pathMatch || (asset.relativePath?.contains('Download') ?? false))) return true;
-          if (lowerQuery == 'screenshots' && (pathMatch || (asset.relativePath?.contains('Screenshots') ?? false))) return true;
-          
-          return titleMatch || pathMatch;
-        }).toList();
-      }
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) return;
+      _applyQuery(query, scanUntilEnough: true);
     });
   }
 
   void _applyFilter(String label) {
-    setState(() {
-      _searchController.text = label;
-      _onSearchChanged(label);
-    });
-    _saveSearch(label);
+    _searchController.text = label;
+    _onSearchChanged(label);
+    unawaited(_saveSearch(label));
   }
 
   void _onAssetTap(AssetEntity asset) {
-    _saveSearch(_currentQuery);
+    unawaited(_saveSearch(_currentQuery));
     if (asset.type == AssetType.video) {
-      final relevantVideos =
-          _filteredAssets.where((a) => a.type == AssetType.video).toList();
-      final index = relevantVideos.indexWhere((e) => e.id == asset.id);
+      final relevantVideos = _filteredAssets
+          .where((candidate) => candidate.type == AssetType.video)
+          .toList(growable: false);
+      final index = relevantVideos.indexWhere((entry) => entry.id == asset.id);
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => VideoViewerScreen(
             videos: relevantVideos,
-            initialIndex: index != -1 ? index : 0,
+            initialIndex: index < 0 ? 0 : index,
           ),
         ),
       );
-    } else {
-      final index = _filteredAssets.indexWhere((e) => e.id == asset.id);
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ViewerScreen(
-            images: _filteredAssets,
-            index: index != -1 ? index : 0,
-          ),
-        ),
-      );
+      return;
     }
+
+    final index = _filteredAssets.indexWhere((entry) => entry.id == asset.id);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ViewerScreen(
+          images: _filteredAssets,
+          index: index < 0 ? 0 : index,
+        ),
+      ),
+    );
+  }
+
+  ImageProvider<Object> _thumbnailProviderFor(AssetEntity asset) {
+    final key = '${asset.id}@180';
+    final provider = _thumbnailProviders.putIfAbsent(
+      key,
+      () => AssetEntityImageProvider(
+        asset,
+        isOriginal: false,
+        thumbnailSize: const ThumbnailSize.square(180),
+        thumbnailFormat: ThumbnailFormat.jpeg,
+      ),
+    );
+    return provider;
+  }
+
+  Widget _buildSearchThumb(AssetEntity asset) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final placeholder = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            colorScheme.surfaceContainerHighest,
+            colorScheme.surfaceContainer,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+    );
+
+    if (Scrollable.recommendDeferredLoadingForContext(context)) {
+      return placeholder;
+    }
+
+    return Image(
+      image: _thumbnailProviderFor(asset),
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.none,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded || frame != null) {
+          return child;
+        }
+        return placeholder;
+      },
+      errorBuilder: (context, error, stackTrace) => placeholder,
+    );
   }
 
   @override
@@ -147,19 +322,19 @@ class _SearchScreenState extends State<SearchScreen> {
       resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          // Background Backdrop Filter for subtle glass effect on Gallery
           Positioned.fill(
             child: GestureDetector(
               onTap: () => Navigator.pop(context),
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                 child: Container(
-                  color: (isDark ? Colors.black : Colors.white).withOpacity(isDark ? 0.42 : 0.22),
+                  color: (isDark ? Colors.black : Colors.white).withOpacity(
+                    isDark ? 0.42 : 0.22,
+                  ),
                 ),
               ),
             ),
           ),
-
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
@@ -171,8 +346,8 @@ class _SearchScreenState extends State<SearchScreen> {
                     _buildSearchBar(isDark, colorScheme),
                     Expanded(
                       child: _currentQuery.isEmpty
-                          ? _buildSuggestions(isDark, colorScheme)
-                          : _buildResults(isDark, colorScheme),
+                          ? _buildSuggestions(colorScheme)
+                          : _buildResults(colorScheme),
                     ),
                   ],
                 ),
@@ -204,7 +379,7 @@ class _SearchScreenState extends State<SearchScreen> {
               controller: _searchController,
               focusNode: _focusNode,
               onChanged: _onSearchChanged,
-              onSubmitted: (val) => _saveSearch(val),
+              onSubmitted: (value) => unawaited(_saveSearch(value)),
               style: TextStyle(
                 color: colorScheme.onSurface,
                 fontSize: 17,
@@ -212,7 +387,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 letterSpacing: -0.2,
               ),
               decoration: InputDecoration(
-                hintText: 'Search photos...',
+                hintText: 'Search photos and videos...',
                 hintStyle: TextStyle(
                   color: colorScheme.onSurface.withOpacity(0.4),
                   fontWeight: FontWeight.w400,
@@ -227,7 +402,7 @@ class _SearchScreenState extends State<SearchScreen> {
                         icon: const Icon(Icons.close_rounded, size: 20),
                         onPressed: () {
                           _searchController.clear();
-                          _onSearchChanged('');
+                          _applyQuery('', scanUntilEnough: false);
                         },
                         color: colorScheme.onSurface.withOpacity(0.7),
                       )
@@ -246,7 +421,7 @@ class _SearchScreenState extends State<SearchScreen> {
     );
   }
 
-  Widget _buildSuggestions(bool isDark, ColorScheme colorScheme) {
+  Widget _buildSuggestions(ColorScheme colorScheme) {
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       physics: const BouncingScrollPhysics(),
@@ -264,20 +439,29 @@ class _SearchScreenState extends State<SearchScreen> {
               ),
             ),
           ),
-          ..._recentSearches.map((search) => ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                leading: Icon(Icons.history_rounded, 
-                  color: colorScheme.onSurface.withOpacity(0.5), size: 20),
-                title: Text(search, 
-                  style: TextStyle(color: colorScheme.onSurface, fontSize: 15)),
-                onTap: () {
-                  _searchController.text = search;
-                  _onSearchChanged(search);
-                },
-              )),
+          ..._recentSearches.map(
+            (search) => ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+              leading: Icon(
+                Icons.history_rounded,
+                color: colorScheme.onSurface.withOpacity(0.5),
+                size: 20,
+              ),
+              title: Text(
+                search,
+                style: TextStyle(
+                  color: colorScheme.onSurface,
+                  fontSize: 15,
+                ),
+              ),
+              onTap: () {
+                _searchController.text = search;
+                _onSearchChanged(search);
+              },
+            ),
+          ),
           const SizedBox(height: 12),
         ],
-        
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
           child: Text(
@@ -298,10 +482,13 @@ class _SearchScreenState extends State<SearchScreen> {
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 child: ActionChip(
-                  avatar: Icon(filter['icon'], size: 16, 
-                    color: colorScheme.primary),
-                  label: Text(filter['label']),
-                  onPressed: () => _applyFilter(filter['label']),
+                  avatar: Icon(
+                    filter['icon'] as IconData,
+                    size: 16,
+                    color: colorScheme.primary,
+                  ),
+                  label: Text(filter['label'] as String),
+                  onPressed: () => _applyFilter(filter['label'] as String),
                   backgroundColor: colorScheme.surface.withOpacity(0.3),
                   side: BorderSide(color: Colors.white.withOpacity(0.12)),
                   shape: RoundedRectangleBorder(
@@ -309,26 +496,48 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                 ),
               );
-            }).toList(),
+            }).toList(growable: false),
           ),
         ),
-        
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
+        if (_isLoadingInitial)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              '${_loadedAssets.length} media items indexed so far',
+              style: TextStyle(
+                color: colorScheme.onSurface.withOpacity(0.65),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
       ],
     );
   }
 
-  Widget _buildResults(bool isDark, ColorScheme colorScheme) {
-    if (_filteredAssets.isEmpty) {
+  Widget _buildResults(ColorScheme colorScheme) {
+    if (_isLoadingInitial && _loadedAssets.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_filteredAssets.isEmpty && !_isScanningQuery && !_isLoadingMore) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 40),
         child: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.search_off_rounded, size: 64, 
-                color: colorScheme.onSurface.withOpacity(0.2)),
+              Icon(
+                Icons.search_off_rounded,
+                size: 64,
+                color: colorScheme.onSurface.withOpacity(0.2),
+              ),
               const SizedBox(height: 16),
               Text(
                 'No results found',
@@ -352,52 +561,64 @@ class _SearchScreenState extends State<SearchScreen> {
       );
     }
 
+    final subtitle = _isScanningQuery || _hasMoreAssets
+        ? 'Search results (${_filteredAssets.length} so far)'
+        : 'Search results (${_filteredAssets.length})';
+
     return Column(
-      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
-          child: Text(
-            'Search results (${_filteredAssets.length})',
-            style: TextStyle(
-              color: colorScheme.onSurface.withOpacity(0.7),
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+          child: Row(
+            children: [
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: colorScheme.onSurface.withOpacity(0.7),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              if (_isScanningQuery || _isLoadingMore)
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: colorScheme.primary,
+                  ),
+                ),
+            ],
           ),
         ),
-        Expanded(child: _buildPhotoGrid(_filteredAssets, colorScheme)),
-      ],
-    );
-  }
-
-  Widget _buildPhotoGrid(List<AssetEntity> assets, ColorScheme colorScheme) {
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 100),
-      physics: const BouncingScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemCount: assets.length > 30 && _currentQuery.isEmpty ? 30 : assets.length,
-      itemBuilder: (context, index) {
-        final asset = assets[index];
-        return grid_widgets.buildGalleryGridTile(
-          asset: asset,
-          image: AssetEntityImage(
-            asset,
-            isOriginal: false,
-            thumbnailSize: const ThumbnailSize.square(180),
-            fit: BoxFit.cover,
+        Expanded(
+          child: GridView.builder(
+            controller: _resultsScrollController,
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 100),
+            physics: const BouncingScrollPhysics(),
+            cacheExtent: 900,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            itemCount: _filteredAssets.length,
+            itemBuilder: (context, index) {
+              final asset = _filteredAssets[index];
+              return grid_widgets.buildGalleryGridTile(
+                asset: asset,
+                image: _buildSearchThumb(asset),
+                onTap: () => _onAssetTap(asset),
+                onDoubleTap: () {},
+                isFavorite: false,
+                isAnimating: false,
+              );
+            },
           ),
-          onTap: () => _onAssetTap(asset),
-          onDoubleTap: () {},
-          isFavorite: false, // Can be refined later
-          isAnimating: false,
-        );
-      },
+        ),
+      ],
     );
   }
 }

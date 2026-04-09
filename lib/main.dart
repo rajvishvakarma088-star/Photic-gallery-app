@@ -13,8 +13,10 @@ void main() {
     DeviceOrientation.portraitDown,
   ]);
 
-  PaintingBinding.instance.imageCache.maximumSize = 320;
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 160 << 20;
+  // Keep a larger decoded-image window so recently viewed thumbnails stay hot
+  // when the user scrolls back, closer to native gallery app behavior.
+  PaintingBinding.instance.imageCache.maximumSize = 1400;
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 320 << 20;
 
   runApp(
     ChangeNotifierProvider(

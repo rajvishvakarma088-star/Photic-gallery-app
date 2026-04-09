@@ -17,8 +17,12 @@ class AlbumSummary {
 }
 
 class GalleryService {
+  static const int mediaPageSize = 120;
+  static const int albumPageSize = 120;
+
   AssetPathEntity? _allPhotosPathCache;
   AssetPathEntity? _allVideosPathCache;
+  AssetPathEntity? _allMediaPathCache;
   List<AssetEntity>? _allAssetsCache;
   final FilterOptionGroup _galleryFilter = FilterOptionGroup(
     orders: const [
@@ -47,12 +51,13 @@ class GalleryService {
   void clearCache() {
     _allPhotosPathCache = null;
     _allVideosPathCache = null;
+    _allMediaPathCache = null;
     _allAssetsCache = null;
   }
 
   Future<List<AssetEntity>> fetchImages({
     int page = 0,
-    int size = 120,
+    int size = mediaPageSize,
   }) async {
     if (!await _hasPermission()) return [];
     final allPhotos = await _getAllPhotosPath();
@@ -88,7 +93,7 @@ class GalleryService {
 
   Future<List<AssetEntity>> fetchVideos({
     int page = 0,
-    int size = 120,
+    int size = mediaPageSize,
   }) async {
     if (!await _hasPermission()) return [];
     final allVideos = await _getAllVideosPath();
@@ -144,7 +149,7 @@ class GalleryService {
   Future<List<AssetEntity>> fetchAlbumImages(
     AssetPathEntity album, {
     int page = 0,
-    int size = 120,
+    int size = albumPageSize,
   }) async {
     if (!await _hasPermission()) return [];
 
@@ -175,7 +180,7 @@ class GalleryService {
   Future<List<AssetEntity>> fetchAlbumVideos(
     AssetPathEntity album, {
     int page = 0,
-    int size = 120,
+    int size = albumPageSize,
   }) async {
     if (!await _hasPermission()) return [];
 
@@ -261,6 +266,19 @@ class GalleryService {
     return validMatches;
   }
 
+  Future<List<AssetEntity>> fetchAssetsPage({
+    int page = 0,
+    int size = mediaPageSize,
+  }) async {
+    if (!await _hasPermission()) return [];
+    final allMedia = await _getAllMediaPath();
+    if (allMedia == null) return [];
+
+    final assets = await allMedia.getAssetListPaged(page: page, size: size);
+    assets.sort(compareAssetsByNewestFirst);
+    return assets;
+  }
+
   Future<AssetPathEntity?> _getAllPhotosPath() async {
     final cached = _allPhotosPathCache;
     if (cached != null) return cached;
@@ -295,6 +313,24 @@ class GalleryService {
       orElse: () => albums.first,
     );
     return _allVideosPathCache;
+  }
+
+  Future<AssetPathEntity?> _getAllMediaPath() async {
+    final cached = _allMediaPathCache;
+    if (cached != null) return cached;
+
+    final albums = await PhotoManager.getAssetPathList(
+      type: RequestType.common,
+      hasAll: true,
+      filterOption: _galleryFilter,
+    );
+    if (albums.isEmpty) return null;
+
+    _allMediaPathCache = albums.firstWhere(
+      (album) => album.isAll,
+      orElse: () => albums.first,
+    );
+    return _allMediaPathCache;
   }
 
   DateTime resolveAssetDate(AssetEntity asset) {

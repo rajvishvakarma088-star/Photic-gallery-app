@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
-import 'dart:io';
-import 'dart:ui' as ui;
 import 'glass_container.dart';
 import 'services/music_service.dart';
 import 'services/audio_player_service.dart';
+import 'utils/lru_cache.dart';
 
 class MusicPlayerScreen extends StatefulWidget {
   final MusicFile music;
@@ -23,10 +22,13 @@ class MusicPlayerScreen extends StatefulWidget {
 
 class _MusicPlayerScreenState extends State<MusicPlayerScreen>
     with SingleTickerProviderStateMixin {
+  static const int _artworkCacheEntries = 120;
   late AudioPlayerService _audioPlayer;
   late AnimationController _albumArtController;
   late Animation<double> _albumArtScale;
   late Animation<double> _albumArtOpacity;
+  final LruMap<String, ImageProvider> _artworkCache =
+      LruMap<String, ImageProvider>(_artworkCacheEntries);
   
   MusicFile? _previousMusic;
   double _dragOffset = 0;
@@ -77,7 +79,37 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen>
   void dispose() {
     _audioPlayer.currentMusicNotifier.removeListener(_onMusicChanged);
     _albumArtController.dispose();
+    _artworkCache.clear();
     super.dispose();
+  }
+
+  Widget _buildAlbumArt(MusicFile music) {
+    return FutureBuilder<Uint8List?>(
+      future: music.fetchAlbumArt(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done &&
+            snapshot.data != null) {
+          final provider = _artworkCache.putIfAbsent(
+            '${music.id}@player-memory',
+            () => MemoryImage(snapshot.data!),
+          );
+          return Image(
+            image: provider,
+            fit: BoxFit.cover,
+          );
+        }
+
+        return Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: music.thumbnailGradient,
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        );
+      },
+    );
   }
 
   String _formatDuration(Duration duration) {
@@ -133,7 +165,6 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen>
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return WillPopScope(
       onWillPop: () async {
@@ -196,29 +227,7 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen>
                                     fit: StackFit.expand,
                                     children: [
                                       // Album art or theme color background
-                                      FutureBuilder<Uint8List?>(
-                                        future: currentMusic.fetchAlbumArt(),
-                                        builder: (context, snapshot) {
-                                          if (snapshot.connectionState == ConnectionState.done && snapshot.data != null) {
-                                            return Image.memory(
-                                              snapshot.data!,
-                                              fit: BoxFit.cover,
-                                              cacheHeight: 600,
-                                              cacheWidth: 600,
-                                            );
-                                          }
-                                          
-                                          return Container(
-                                            decoration: BoxDecoration(
-                                              gradient: LinearGradient(
-                                                colors: currentMusic.thumbnailGradient,
-                                                begin: Alignment.topLeft,
-                                                end: Alignment.bottomRight,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      ),
+                                      _buildAlbumArt(currentMusic),
                                       // Music note icon overlay (only if no album art found yet)
                                       FutureBuilder<Uint8List?>(
                                         future: currentMusic.fetchAlbumArt(),
