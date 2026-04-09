@@ -124,14 +124,19 @@ Widget buildGalleryGridTile({
                       curve: Curves.easeOutBack,
                       tween: Tween<double>(begin: 0.0, end: 1.0),
                       builder: (context, opacity, child) {
+                        final colorScheme = Theme.of(context).colorScheme;
+                        final borderColor =
+                            colorScheme.primary.withValues(alpha: 0.92);
+                        final fillColor =
+                            colorScheme.primary.withValues(alpha: 0.18);
                         return Opacity(
                           opacity: opacity.clamp(0.0, 1.0),
                           child: DecoratedBox(
                             decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.28),
+                              color: fillColor,
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                color: Colors.white,
+                                color: borderColor,
                                 width: 2,
                               ),
                             ),
@@ -141,9 +146,9 @@ Widget buildGalleryGridTile({
                                 padding: const EdgeInsets.all(8),
                                 child: Transform.scale(
                                   scale: opacity,
-                                  child: const Icon(
+                                  child: Icon(
                                     Icons.check_circle,
-                                    color: Colors.white,
+                                    color: borderColor,
                                   ),
                                 ),
                               ),

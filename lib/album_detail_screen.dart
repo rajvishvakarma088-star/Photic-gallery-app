@@ -228,6 +228,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   void _startDragSelection(AssetEntity asset, int tab) {
     if (isRecycleActionInProgress) return;
     _dragSelectionTargetValue = !selectedAssetIds.contains(asset.id);
+    HapticFeedback.selectionClick();
     _dragSelectionTouchedIds
       ..clear()
       ..add(asset.id);
@@ -737,6 +738,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             onLongPressEnd: (_) => _endDragSelection(),
             onTap: () async {
               if (isSelectionMode) {
+                HapticFeedback.selectionClick();
                 setState(() {
                   if (!selectedAssetIds.add(asset.id)) {
                     selectedAssetIds.remove(asset.id);
@@ -844,15 +846,30 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                     Positioned.fill(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.28),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.18),
                           borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: Colors.white, width: 2),
+                          border: Border.all(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.92),
+                            width: 2,
+                          ),
                         ),
-                        child: const Align(
+                        child: Align(
                           alignment: Alignment.topLeft,
                           child: Padding(
                             padding: EdgeInsets.all(8),
-                            child: Icon(Icons.check_circle, color: Colors.white),
+                            child: Icon(
+                              Icons.check_circle,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withValues(alpha: 0.92),
+                            ),
                           ),
                         ),
                       ),

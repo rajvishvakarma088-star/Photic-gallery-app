@@ -279,6 +279,17 @@ class _ViewerScreenState extends State<ViewerScreen> {
     });
   }
 
+  void _beginThumbnailStripInteraction([int? pointer]) {
+    thumbnailStripTimer?.cancel();
+    isInteractingWithStrip = true;
+    _resetHorizontalSwipeTracking(pointer: pointer);
+  }
+
+  void _endThumbnailStripInteraction() {
+    isInteractingWithStrip = false;
+    scheduleThumbnailStripHide();
+  }
+
   Future<void> animateToViewerPage(int index) async {
     if (!controller.hasClients ||
         index == currentIndex ||
@@ -831,96 +842,94 @@ class _ViewerScreenState extends State<ViewerScreen> {
         borderRadius: BorderRadius.circular(24),
         child: SizedBox(
           height: 58,
-          child: NotificationListener<ScrollNotification>(
-            onNotification: (notification) {
-              if (notification is ScrollStartNotification) {
-                thumbnailStripTimer?.cancel();
-                isInteractingWithStrip = true;
-              } else if (notification is ScrollEndNotification) {
-                isInteractingWithStrip = false;
-                scheduleThumbnailStripHide();
-              }
-              return false;
-            },
-            child: ListView.separated(
-              controller: thumbnailScrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              itemCount: widget.images.length,
-              separatorBuilder: (_, __) =>
-                  const SizedBox(width: thumbnailSpacing),
-              itemBuilder: (context, index) {
-                final asset = widget.images[index];
-                final isSelected = index == currentIndex;
+          child: Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: (event) => _beginThumbnailStripInteraction(event.pointer),
+            onPointerMove: (event) => _resetHorizontalSwipeTracking(pointer: event.pointer),
+            onPointerUp: (_) => _endThumbnailStripInteraction(),
+            onPointerCancel: (_) => _endThumbnailStripInteraction(),
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (notification) {
+                if (notification is ScrollStartNotification) {
+                  _beginThumbnailStripInteraction();
+                } else if (notification is ScrollEndNotification) {
+                  _endThumbnailStripInteraction();
+                }
+                return false;
+              },
+              child: ListView.separated(
+                controller: thumbnailScrollController,
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                itemCount: widget.images.length,
+                separatorBuilder: (_, __) =>
+                    const SizedBox(width: thumbnailSpacing),
+                itemBuilder: (context, index) {
+                  final asset = widget.images[index];
+                  final isSelected = index == currentIndex;
 
-                return GestureDetector(
-                  onTapDown: (_) {
-                    thumbnailStripTimer?.cancel();
-                    isInteractingWithStrip = true;
-                  },
-                  onTapCancel: () {
-                    isInteractingWithStrip = false;
-                    scheduleThumbnailStripHide();
-                  },
-                  onTap: () {
-                    showThumbnailStripTemporarily();
-                    animateToViewerPage(index);
-                    isInteractingWithStrip = false;
-                    scheduleThumbnailStripHide();
-                  },
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    curve: Curves.easeOutCubic,
-                    width: thumbnailItemWidth,
-                    padding: const EdgeInsets.all(2.2),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(
+                  return GestureDetector(
+                    onTapDown: (_) => _beginThumbnailStripInteraction(),
+                    onTapCancel: _endThumbnailStripInteraction,
+                    onTap: () {
+                      showThumbnailStripTemporarily();
+                      animateToViewerPage(index);
+                      _endThumbnailStripInteraction();
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeOutCubic,
+                      width: thumbnailItemWidth,
+                      padding: const EdgeInsets.all(2.2),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: isSelected
+                              ? activeBorder
+                              : Colors.white.withOpacity(isDark ? 0.16 : 0.38),
+                          width: isSelected ? 1.8 : 0.9,
+                        ),
                         color: isSelected
-                            ? activeBorder
-                            : Colors.white.withOpacity(isDark ? 0.16 : 0.38),
-                        width: isSelected ? 1.8 : 0.9,
+                            ? activeBorder.withOpacity(isDark ? 0.12 : 0.08)
+                            : Colors.black.withOpacity(isDark ? 0.12 : 0.04),
                       ),
-                      color: isSelected
-                          ? activeBorder.withOpacity(isDark ? 0.12 : 0.08)
-                          : Colors.black.withOpacity(isDark ? 0.12 : 0.04),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: AnimatedScale(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        scale: isSelected ? 1 : 0.92,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            Image(
-                              image: stripImageProvider(asset),
-                              fit: BoxFit.cover,
-                              gaplessPlayback: true,
-                            ),
-                            if (isSelected)
-                              DecoratedBox(
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(14),
-                                  gradient: LinearGradient(
-                                    colors: [
-                                      Colors.transparent,
-                                      Colors.black.withOpacity(0.14),
-                                    ],
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: AnimatedScale(
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOutCubic,
+                          scale: isSelected ? 1 : 0.92,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Image(
+                                image: stripImageProvider(asset),
+                                fit: BoxFit.cover,
+                                gaplessPlayback: true,
+                              ),
+                              if (isSelected)
+                                DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(14),
+                                    gradient: LinearGradient(
+                                      colors: [
+                                        Colors.transparent,
+                                        Colors.black.withOpacity(0.14),
+                                      ],
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                    ),
                                   ),
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
         ),

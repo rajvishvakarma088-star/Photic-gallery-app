@@ -14,7 +14,6 @@ import 'services/vault_database.dart';
 import 'services/vault_service.dart';
 import 'theme_provider.dart';
 import 'utils/fast_page_scroll_physics.dart';
-import 'utils/lru_cache.dart';
 
 class VaultScreen extends StatefulWidget {
   const VaultScreen({super.key});
@@ -24,10 +23,7 @@ class VaultScreen extends StatefulWidget {
 }
 
 class _VaultScreenState extends State<VaultScreen> with WidgetsBindingObserver {
-  static const int _vaultThumbCacheEntries = 600;
   final VaultService vaultService = VaultService.instance;
-  final LruMap<String, ImageProvider> _vaultThumbCache =
-      LruMap<String, ImageProvider>(_vaultThumbCacheEntries);
   List<VaultItem> _items = [];
   bool _isLoading = true;
   bool _biometricEnabled = false;
@@ -55,22 +51,13 @@ class _VaultScreenState extends State<VaultScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _vaultThumbCache.clear();
     unawaited(vaultService.lock());
     unawaited(ScreenshotProtectionService.setProtected(false));
     super.dispose();
   }
 
   ImageProvider _vaultThumbProvider(String filePath) {
-    final key = '$filePath@240';
-    return _vaultThumbCache.putIfAbsent(
-      key,
-      () => ResizeImage(
-        FileImage(File(filePath)),
-        width: 240,
-        height: 240,
-      ),
-    );
+    return FileImage(File(filePath));
   }
 
   @override
@@ -845,14 +832,11 @@ class VaultPreviewScreen extends StatefulWidget {
 }
 
 class _VaultPreviewScreenState extends State<VaultPreviewScreen> {
-  static const int _previewImageCacheEntries = 18;
   VideoPlayerController? _videoController;
   ChewieController? _chewieController;
   late PageController _pageController;
   late int currentIndex;
   final ValueNotifier<double> verticalDragNotifier = ValueNotifier<double>(0);
-  final LruMap<String, ImageProvider> _previewImageCache =
-      LruMap<String, ImageProvider>(_previewImageCacheEntries);
 
   double get dismissProgress =>
       (verticalDragNotifier.value / 200).clamp(0.0, 1.0);
@@ -873,16 +857,11 @@ class _VaultPreviewScreenState extends State<VaultPreviewScreen> {
     _videoController?.dispose();
     _pageController.dispose();
     verticalDragNotifier.dispose();
-    _previewImageCache.clear();
     super.dispose();
   }
 
   ImageProvider _previewProvider(String filePath) {
-    final key = '$filePath@1200';
-    return _previewImageCache.putIfAbsent(
-      key,
-      () => ResizeImage(FileImage(File(filePath)), width: 1200, height: 1200),
-    );
+    return FileImage(File(filePath));
   }
 
   Future<void> _initializeVideo({String? videoPath}) async {
@@ -983,7 +962,8 @@ class _VaultPreviewScreenState extends State<VaultPreviewScreen> {
                             maxScale: 4,
                             child: Image(
                               image: _previewProvider(item.vaultPath),
-                              fit: BoxFit.cover,
+                              fit: BoxFit.contain,
+                              filterQuality: FilterQuality.high,
                             ),
                           )
                         : index == currentIndex && _chewieController != null

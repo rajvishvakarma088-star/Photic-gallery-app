@@ -15,6 +15,7 @@ import 'glass_container.dart';
 import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
 import 'services/recycle_bin_database.dart';
+import 'services/thumbnail_disk_cache.dart';
 import 'viewer_screen.dart';
 import 'video_viewer_screen.dart';
 import 'vault_lock_screen.dart';
@@ -26,7 +27,6 @@ import 'services/audio_player_service.dart';
 import 'mini_music_player.dart';
 import 'music_player_screen.dart';
 import 'search_screen.dart';
-import 'utils/lru_cache.dart';
 
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key});
@@ -37,9 +37,11 @@ class GalleryScreen extends StatefulWidget {
 
 class _GalleryScreenState extends State<GalleryScreen>
     with WidgetsBindingObserver {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GalleryService service = GalleryService();
   final FavoritesDatabase favoritesDatabase = FavoritesDatabase.instance;
   final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
+  final ThumbnailDiskCache _thumbDiskCache = ThumbnailDiskCache.instance;
   late AudioPlayerService audioPlayerService;
   final ScrollController scrollController = ScrollController();
   final ScrollController videosScrollController = ScrollController();
@@ -67,16 +69,13 @@ class _GalleryScreenState extends State<GalleryScreen>
   final Set<String> animating = {};
   final Set<String> recycleBinIds = {};
   final Set<String> selectedAssetIds = {};
+  final ValueNotifier<int> _selectionCount = ValueNotifier<int>(0);
   final Map<String, GlobalKey> _gridTileKeys = {};
   int? _dragSelectionStartIndex;
   Set<String>? _dragSelectionInitialIds;
 
-  final LruMap<String, AssetEntityImageProvider> thumbnailProviderCache =
-      LruMap<String, AssetEntityImageProvider>(_maxThumbnailProviderEntries);
-  final LruSet<String> warmedThumbnailKeys =
-      LruSet<String>(_maxWarmThumbnailEntries);
-  final LruSet<String> seenThumbnailAssetIds =
-      LruSet<String>(_maxWarmThumbnailEntries);
+  final Set<String> warmedThumbnailKeys = <String>{};
+  final Set<String> seenThumbnailAssetIds = <String>{};
 
   bool isLoading = true;
   bool isLoadingVideos = true;
@@ -93,9 +92,9 @@ class _GalleryScreenState extends State<GalleryScreen>
   int currentPage = 0;
   int currentVideoPage = 0;
   int selectedIndex = 0;
+  int _primaryTabIndex = 0;
   static const int pageSize = 160;
-  static const int _maxThumbnailProviderEntries = 5000;
-  static const int _maxWarmThumbnailEntries = 12000;
+  static const int _startupWarmupAssetCount = 96;
   static const double pinchStepOutThreshold = 1.07;
   static const double pinchStepInThreshold = 0.93;
   static const int pinchStepCooldownMs = 55;
@@ -194,6 +193,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     super.initState();
     audioPlayerService = AudioPlayerService();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_thumbDiskCache.ensureReady());
     scrollController.addListener(onScroll);
     videosScrollController.addListener(onScroll);
     recycleBinScrollController.addListener(onScroll);
@@ -208,7 +208,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     _thumbnailWarmupTimer?.cancel();
     _dragAutoScrollTimer?.cancel();
     _vaultHoldTimer?.cancel();
-    thumbnailProviderCache.clear();
+    _selectionCount.dispose();
     warmedThumbnailKeys.clear();
     seenThumbnailAssetIds.clear();
     _gridTileKeys.clear();
@@ -219,6 +219,10 @@ class _GalleryScreenState extends State<GalleryScreen>
     recycleBinScrollController.dispose();
     musicScrollController.dispose();
     super.dispose();
+  }
+
+  void _notifySelectionChanged() {
+    _selectionCount.value = selectedAssetIds.length;
   }
 
   @override
@@ -239,6 +243,8 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
 
     if (!_shouldRefreshOnResume) {
+      _scheduleThumbnailWarmup();
+      _scheduleStartupThumbnailWarmup();
       return;
     }
     _shouldRefreshOnResume = false;
@@ -247,6 +253,8 @@ class _GalleryScreenState extends State<GalleryScreen>
     if (lastBackgroundedAt == null ||
         DateTime.now().difference(lastBackgroundedAt) <
             _resumeRefreshThreshold) {
+      _scheduleThumbnailWarmup();
+      _scheduleStartupThumbnailWarmup();
       return;
     }
 
@@ -444,15 +452,25 @@ class _GalleryScreenState extends State<GalleryScreen>
       selectedAssetIds.clear();
       _gridTileKeys.clear();
     });
+    _notifySelectionChanged();
   }
 
   void toggleSelection(AssetEntity asset) {
     if (isRecycleActionInProgress) return;
-    setState(() {
-      if (!selectedAssetIds.add(asset.id)) {
-        selectedAssetIds.remove(asset.id);
-      }
-    });
+    final wasEmpty = selectedAssetIds.isEmpty;
+    if (!selectedAssetIds.add(asset.id)) {
+      selectedAssetIds.remove(asset.id);
+    }
+    HapticFeedback.selectionClick();
+    final isEmpty = selectedAssetIds.isEmpty;
+
+    if (!wasEmpty && isEmpty) {
+      setState(() {
+        _gridTileKeys.clear();
+      });
+    }
+
+    _notifySelectionChanged();
   }
 
   ScrollController? get _activeDragSelectionScrollController {
@@ -467,6 +485,7 @@ class _GalleryScreenState extends State<GalleryScreen>
   void _startDragSelection(AssetEntity asset) {
     if (isRecycleActionInProgress) return;
     _dragSelectionTargetValue = !selectedAssetIds.contains(asset.id);
+    HapticFeedback.selectionClick();
     _dragSelectionTouchedIds
       ..clear()
       ..add(asset.id);
@@ -483,6 +502,7 @@ class _GalleryScreenState extends State<GalleryScreen>
         selectedAssetIds.remove(asset.id);
       }
     });
+    _notifySelectionChanged();
   }
 
   List<AssetEntity> _getVisibleItemsForCurrentTab() {
@@ -549,6 +569,7 @@ class _GalleryScreenState extends State<GalleryScreen>
           }
         }
       });
+      _notifySelectionChanged();
     }
 
     _updateDragAutoScroll(globalPosition, visibleItems);
@@ -660,6 +681,7 @@ class _GalleryScreenState extends State<GalleryScreen>
         selectedAssetIds.addAll(visibleIds);
       }
     });
+    _notifySelectionChanged();
   }
 
   void _showRecycleSnackBar(String message) {
@@ -812,7 +834,9 @@ class _GalleryScreenState extends State<GalleryScreen>
             .toList();
         recycleBinIds.addAll(ids);
         selectedAssetIds.clear();
+        _gridTileKeys.clear();
       });
+      _notifySelectionChanged();
 
       await _refreshMediaAfterRecycleChange();
       if (!mounted) return;
@@ -842,7 +866,9 @@ class _GalleryScreenState extends State<GalleryScreen>
       setState(() {
         recycleBinIds.removeAll(ids);
         selectedAssetIds.clear();
+        _gridTileKeys.clear();
       });
+      _notifySelectionChanged();
 
       await _refreshMediaAfterRecycleChange();
       if (!mounted) return;
@@ -873,7 +899,9 @@ class _GalleryScreenState extends State<GalleryScreen>
       setState(() {
         recycleBinIds.removeAll(ids);
         selectedAssetIds.clear();
+        _gridTileKeys.clear();
       });
+      _notifySelectionChanged();
 
       await _refreshMediaAfterRecycleChange();
       if (!mounted) return;
@@ -1036,7 +1064,9 @@ class _GalleryScreenState extends State<GalleryScreen>
             .where((asset) => !ids.contains(asset.id))
             .toList();
         selectedAssetIds.clear();
+        _gridTileKeys.clear();
       });
+      _notifySelectionChanged();
 
       await _refreshMediaAfterRecycleChange();
       if (!mounted) return;
@@ -1278,7 +1308,9 @@ class _GalleryScreenState extends State<GalleryScreen>
       favorites.removeAll(ids);
       favoriteImages.removeWhere((asset) => ids.contains(asset.id));
       selectedAssetIds.clear();
+      _gridTileKeys.clear();
     });
+    _notifySelectionChanged();
     _showRecycleSnackBar('Removed ${ids.length} from favorites');
   }
 
@@ -1953,6 +1985,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _scheduleThumbnailWarmup();
+      _scheduleStartupThumbnailWarmup();
     });
     unawaited(_prefetchNextImages());
   }
@@ -2051,6 +2084,11 @@ class _GalleryScreenState extends State<GalleryScreen>
         hasMoreVideos = resolvedHasMore;
       }
     });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scheduleThumbnailWarmup();
+    });
   }
 
   Future<void> _prefetchNextImages() async {
@@ -2077,6 +2115,13 @@ class _GalleryScreenState extends State<GalleryScreen>
       if (!mounted || selectedIndex != 0) return;
       _prefetchedImages = data;
       _prefetchedPage = targetPage;
+      unawaited(
+        _thumbDiskCache.prefetchMany(
+          data,
+          galleryThumbPx,
+          maxCount: 120,
+        ),
+      );
     } finally {
       _isPrefetchingNextPage = false;
     }
@@ -2130,15 +2175,11 @@ class _GalleryScreenState extends State<GalleryScreen>
   }
 
   ImageProvider<Object> _thumbnailProviderFor(AssetEntity asset, int thumbPx) {
-    final id = '${asset.id}@$thumbPx';
-    return thumbnailProviderCache.putIfAbsent(
-      id,
-      () => AssetEntityImageProvider(
-        asset,
-        isOriginal: false,
-        thumbnailSize: ThumbnailSize.square(thumbPx),
-        thumbnailFormat: ThumbnailFormat.jpeg,
-      ),
+    return AssetEntityImageProvider(
+      asset,
+      isOriginal: false,
+      thumbnailSize: ThumbnailSize.square(thumbPx),
+      thumbnailFormat: ThumbnailFormat.jpeg,
     );
   }
 
@@ -2152,6 +2193,36 @@ class _GalleryScreenState extends State<GalleryScreen>
       if (!mounted) return;
       _warmVisibleThumbnailBand();
     });
+  }
+
+  void _scheduleStartupThumbnailWarmup() {
+    if (!mounted ||
+        _isViewerTransitioning ||
+        selectedIndex != 0 ||
+        images.isEmpty) {
+      return;
+    }
+
+    _thumbnailWarmupTimer?.cancel();
+    _thumbnailWarmupTimer = Timer(const Duration(milliseconds: 24), () {
+      if (!mounted || selectedIndex != 0 || images.isEmpty) return;
+      _warmAssetRange(images, 0, _startupWarmupAssetCount);
+    });
+  }
+
+  void _warmAssetRange(List<AssetEntity> assets, int startIndex, int endIndex) {
+    if (!mounted || assets.isEmpty) return;
+
+    final safeStart = startIndex.clamp(0, assets.length);
+    final safeEnd = endIndex.clamp(safeStart, assets.length);
+
+    for (var i = safeStart; i < safeEnd; i++) {
+      final asset = assets[i];
+      seenThumbnailAssetIds.add(asset.id);
+      warmedThumbnailKeys.add('${asset.id}@$galleryThumbPx');
+      unawaited(_thumbDiskCache.prefetch(asset, galleryThumbPx));
+      precacheImage(_thumbnailProviderFor(asset, galleryThumbPx), context);
+    }
   }
 
   void _warmVisibleThumbnailBand() {
@@ -2204,13 +2275,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     _lastWarmedStart = startIndex;
     _lastWarmedEnd = endIndex;
 
-    for (var i = startIndex; i < endIndex; i++) {
-        if (i >= activeImages.length) break;
-        final asset = activeImages[i];
-        seenThumbnailAssetIds.add(asset.id);
-        warmedThumbnailKeys.add('${asset.id}@$galleryThumbPx');
-        precacheImage(_thumbnailProviderFor(asset, galleryThumbPx), context);
-    }
+    _warmAssetRange(activeImages, startIndex, endIndex);
   }
 
   Widget buildImage(AssetEntity asset, {int thumbPx = 220}) {
@@ -2238,7 +2303,14 @@ class _GalleryScreenState extends State<GalleryScreen>
 
     seenThumbnailAssetIds.add(asset.id);
     warmedThumbnailKeys.add(id);
-    final provider = _thumbnailProviderFor(asset, thumbPx);
+    final cachedFile = _thumbDiskCache.cachedFileSync(asset.id, thumbPx);
+    final provider = cachedFile != null
+        ? FileImage(cachedFile)
+        : _thumbnailProviderFor(asset, thumbPx);
+
+    if (cachedFile == null) {
+      unawaited(_thumbDiskCache.prefetch(asset, thumbPx));
+    }
 
     return Image(
       image: provider,
@@ -2256,60 +2328,367 @@ class _GalleryScreenState extends State<GalleryScreen>
   }
 
   Widget buildBottomBar(BuildContext context, bool isDark) {
+    final colorScheme = Theme.of(context).colorScheme;
+    // Dark mode: keep the "liquid glass" look but add a consistent dark base
+    // so icons stay readable even over bright/contrasty content behind the blur.
+    final baseScrim = isDark
+        ? Colors.black.withValues(alpha: 0.34)
+        : Colors.transparent;
+    final surfaceTint = isDark
+        ? const Color(0xFF8A76FF).withValues(alpha: 0.16)
+        : colorScheme.primary.withValues(alpha: 0.08);
+    final border = isDark
+        ? Colors.white.withValues(alpha: 0.22)
+        : Colors.white.withValues(alpha: 0.72);
+    final unselectedIcon = isDark
+        ? Colors.white.withValues(alpha: 0.90)
+        : colorScheme.onSurfaceVariant.withValues(alpha: 0.90);
+    final selectedIcon = isDark ? Colors.white : colorScheme.onPrimaryContainer;
+    final indicator = isDark
+        ? colorScheme.primary.withValues(alpha: 0.34)
+        : colorScheme.primaryContainer.withValues(alpha: 0.84);
+
     return GlassContainer(
-      borderRadius: BorderRadius.circular(28),
-      child: NavigationBar(
-        height: 72,
-        selectedIndex: selectedIndex,
-        backgroundColor: Colors.transparent,
-        onDestinationSelected: (index) {
-          if (index == selectedIndex) return;
-          setState(() {
-            selectedIndex = index;
-            selectedAssetIds.clear();
-            _gridTileKeys.clear();
-          });
-        },
-        destinations: [
-          NavigationDestination(
-            icon: const Icon(Icons.photo_library_outlined),
-            selectedIcon: const Icon(Icons.photo_library),
-            label: 'Gallery',
-          ),
-          const NavigationDestination(
-            icon: Icon(Icons.videocam_outlined),
-            selectedIcon: Icon(Icons.videocam),
-            label: 'Videos',
-          ),
-          const NavigationDestination(
-            icon: Icon(Icons.music_note_outlined),
-            selectedIcon: Icon(Icons.music_note),
-            label: 'Music',
-          ),
-          const NavigationDestination(
-            icon: Icon(Icons.folder_copy_outlined),
-            selectedIcon: Icon(Icons.folder_copy),
-            label: 'Albums',
-          ),
-          NavigationDestination(
-            icon: Badge.count(
-              count: favorites.length,
-              isLabelVisible: favorites.isNotEmpty,
-              child: const Icon(Icons.favorite_border),
+      borderRadius: BorderRadius.circular(24),
+      blurSigma: 26,
+      borderColor: border,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(color: baseScrim),
+              ),
             ),
-            selectedIcon: const Icon(Icons.favorite),
-            label: 'Favorites',
           ),
-          NavigationDestination(
-            icon: Badge.count(
-              count: recycleBinItems.length,
-              isLabelVisible: recycleBinItems.isNotEmpty,
-              child: const Icon(Icons.delete_outline_rounded),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      surfaceTint,
+                      Colors.transparent,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+              ),
             ),
-            selectedIcon: const Icon(Icons.delete_rounded),
-            label: 'Recycle',
+          ),
+          NavigationBarTheme(
+            data: NavigationBarThemeData(
+              indicatorColor: indicator,
+              indicatorShape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              overlayColor: WidgetStatePropertyAll(
+                Colors.white.withValues(alpha: isDark ? 0.08 : 0.06),
+              ),
+              iconTheme: WidgetStateProperty.resolveWith((states) {
+                if (states.contains(WidgetState.selected)) {
+                  return IconThemeData(color: selectedIcon, size: 28);
+                }
+                return IconThemeData(color: unselectedIcon, size: 26);
+              }),
+            ),
+            child: BadgeTheme(
+              data: BadgeThemeData(
+                backgroundColor: isDark
+                    ? Colors.white.withValues(alpha: 0.16)
+                    : colorScheme.primary.withValues(alpha: 0.14),
+                textColor: isDark
+                    ? Colors.white.withValues(alpha: 0.92)
+                    : colorScheme.onPrimary,
+              ),
+              child: NavigationBar(
+                height: 78,
+                animationDuration: const Duration(milliseconds: 360),
+                selectedIndex: _primaryTabIndex.clamp(0, 4),
+                backgroundColor: Colors.transparent,
+                shadowColor: Colors.transparent,
+                labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
+                onDestinationSelected: (index) {
+                  if (index == _primaryTabIndex && selectedIndex == index) {
+                    return;
+                  }
+                  setState(() {
+                    _primaryTabIndex = index;
+                    selectedIndex = index;
+                    selectedAssetIds.clear();
+                    _gridTileKeys.clear();
+                  });
+                  _notifySelectionChanged();
+                  if (index == 0) {
+                    _scheduleStartupThumbnailWarmup();
+                  } else {
+                    _scheduleThumbnailWarmup();
+                  }
+                },
+                destinations: [
+                  const NavigationDestination(
+                    icon: Icon(Icons.photo_library_outlined),
+                    selectedIcon: Icon(Icons.photo_library),
+                    label: 'Gallery',
+                  ),
+                  const NavigationDestination(
+                    icon: Icon(Icons.videocam_outlined),
+                    selectedIcon: Icon(Icons.videocam),
+                    label: 'Videos',
+                  ),
+                  const NavigationDestination(
+                    icon: Icon(Icons.music_note_outlined),
+                    selectedIcon: Icon(Icons.music_note),
+                    label: 'Music',
+                  ),
+                  const NavigationDestination(
+                    icon: Icon(Icons.folder_copy_outlined),
+                    selectedIcon: Icon(Icons.folder_copy),
+                    label: 'Albums',
+                  ),
+                  NavigationDestination(
+                    icon: Badge.count(
+                      count: favorites.length,
+                      isLabelVisible: favorites.isNotEmpty,
+                      child: const Icon(Icons.favorite_border),
+                    ),
+                    selectedIcon: const Icon(Icons.favorite),
+                    label: 'Favorites',
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEndDrawer(BuildContext context) {
+    final themeProvider = context.read<ThemeProvider>();
+    final isDark = themeProvider.isDark(context);
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Drawer(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      width: 320,
+      child: SafeArea(
+        child: TweenAnimationBuilder<double>(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          tween: Tween(begin: 0.0, end: 1.0),
+          builder: (context, t, child) {
+            return Transform.translate(
+              offset: Offset((1 - t) * 12, 0),
+              child: Opacity(opacity: t, child: child),
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+            child: GlassContainer(
+              borderRadius: BorderRadius.circular(28),
+              blurSigma: 18,
+              backgroundColor: (isDark
+                      ? const Color(0xFF120C24)
+                      : const Color(0xFFF7F2FF))
+                  .withValues(alpha: isDark ? 0.74 : 0.9),
+              borderColor: (isDark ? Colors.white : colorScheme.primary)
+                  .withValues(alpha: isDark ? 0.16 : 0.12),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Menu',
+                          style: TextStyle(
+                            color: colorScheme.onSurface,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          tooltip: 'Close',
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    _drawerTile(
+                      context: context,
+                      icon: Icons.delete_outline_rounded,
+                      title: 'Recycle Bin',
+                      subtitle: recycleBinItems.isEmpty
+                          ? 'Empty'
+                          : '${recycleBinItems.length} items',
+                      onTap: () {
+                        Navigator.pop(context);
+                        setState(() {
+                          selectedIndex = 5;
+                          selectedAssetIds.clear();
+                          _gridTileKeys.clear();
+                        });
+                        _notifySelectionChanged();
+                        _scheduleThumbnailWarmup();
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(
+                          alpha: isDark ? 0.08 : 0.5,
+                        ),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color:
+                              colorScheme.onSurface.withValues(alpha: 0.08),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isDark
+                                ? Icons.dark_mode_rounded
+                                : Icons.light_mode_rounded,
+                            color: colorScheme.onSurface,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Theme',
+                                  style: TextStyle(
+                                    color: colorScheme.onSurface,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  isDark ? 'Dark' : 'Light',
+                                  style: TextStyle(
+                                    color: colorScheme.onSurface
+                                        .withValues(alpha: 0.7),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Switch(
+                            value: isDark,
+                            onChanged: (value) {
+                              final currentlyDark = themeProvider.isDark(context);
+                              if (value == currentlyDark) return;
+                              HapticFeedback.selectionClick();
+                              themeProvider.toggleTheme(context);
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _drawerTile(
+                      context: context,
+                      icon: Icons.settings_outlined,
+                      title: 'Settings',
+                      subtitle: 'App preferences',
+                      onTap: () {
+                        Navigator.pop(context);
+                        _showRecycleSnackBar('Settings coming soon');
+                      },
+                    ),
+                    const Spacer(),
+                    Text(
+                      'Lightweight • Premium • Fast',
+                      style: TextStyle(
+                        color: colorScheme.onSurface.withValues(alpha: 0.55),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _drawerTile({
+    required BuildContext context,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: isDark ? 0.08 : 0.5),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: colorScheme.onSurface.withValues(alpha: 0.08),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: colorScheme.onSurface),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: colorScheme.onSurface,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: colorScheme.onSurface.withValues(alpha: 0.7),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: colorScheme.onSurface.withValues(alpha: 0.7),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2372,170 +2751,184 @@ class _GalleryScreenState extends State<GalleryScreen>
     );
     final openingProvider = ViewerScreen.openingImageProvider(context, asset);
     final isRecycleBinTab = selectedIndex == 5;
-    final isSelected = selectedAssetIds.contains(asset.id);
     // Use a tab-specific key prefix to avoid Duplicate GlobalKey error during transitions 
     // or when the same asset appears in multiple tabs (e.g. Gallery and Favorites)
     final keyString = 'tab_${selectedIndex}_${asset.id}';
     final tileKey = _gridTileKeys.putIfAbsent(keyString, GlobalKey.new);
 
-    return gallery_grid_widgets.buildGalleryGridTile(
-      asset: asset,
-      image: Stack(
-        fit: StackFit.expand,
-        children: [
-          buildImage(asset, thumbPx: galleryThumbPx),
-          if (asset.type == AssetType.video)
-            Positioned(
-              bottom: 8,
-              right: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.play_arrow_rounded,
-                      color: Colors.white,
-                      size: 14,
+    return ValueListenableBuilder<int>(
+      valueListenable: _selectionCount,
+      builder: (context, _, __) {
+        final isSelectionMode = selectedAssetIds.isNotEmpty;
+        final isSelected = selectedAssetIds.contains(asset.id);
+
+        return gallery_grid_widgets.buildGalleryGridTile(
+          asset: asset,
+          image: Stack(
+            fit: StackFit.expand,
+            children: [
+              buildImage(asset, thumbPx: galleryThumbPx),
+              if (asset.type == AssetType.video)
+                Positioned(
+                  bottom: 8,
+                  right: 8,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.6),
+                      borderRadius: BorderRadius.circular(6),
                     ),
-                    const SizedBox(width: 2),
-                    Text(
-                      _formatDuration(asset.videoDuration),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          _formatDuration(asset.videoDuration),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ),
-        ],
-      ),
-      onTap: () async {
-        if (isSelectionMode) {
-          toggleSelection(asset);
-          return;
-        }
-
-        _thumbnailWarmupTimer?.cancel();
-        _isViewerTransitioning = true;
-
-        if (asset.type == AssetType.video) {
-          final videoList = visibleImages
-              .where((e) => e.type == AssetType.video)
-              .toList();
-          var videoIndex = videoList.indexWhere((e) => e.id == asset.id);
-          if (videoIndex == -1) {
-            videoList.insert(0, asset);
-            videoIndex = 0;
-          }
-
-          final viewerAction = await Navigator.push<String>(
-            context,
-            buildCinematicRoute(
-              VideoViewerScreen(videos: videoList, initialIndex: videoIndex),
-            ),
-          );
-          if ((viewerAction == 'recycle' || viewerAction == 'vault') &&
-              mounted) {
-            await _refreshMediaAfterRecycleChange();
-            if (!mounted) return;
-            _showRecycleSnackBar(
-              viewerAction == 'vault'
-                  ? 'Moved to Safe Folder'
-                  : 'Moved to recycle bin',
-            );
-          }
-          // Always refresh favorites when returning from a viewer
-          await loadFavorites();
-        } else {
-          unawaited(precacheImage(previewProvider, context));
-          unawaited(precacheImage(openingProvider, context));
-
-          final dynamic result = await Navigator.push<dynamic>(
-            context,
-            buildCinematicRoute(
-              ViewerScreen(
-                images: visibleImages,
-                index: absoluteIndex,
-                initialPreviewProvider: previewProvider,
-                initialViewerProvider: openingProvider,
-              ),
-            ),
-          );
-
-          if (result != null && mounted) {
-            String? action;
-            if (result is String) {
-              action = result;
-            } else if (result is AssetEntity) {
-              action = 'edited';
-              // Perform a truly instant local update before the background refresh
-              setState(() {
-                _pendingAssets.add(result);
-                if (result.type == AssetType.video) {
-                  if (!videos.any((e) => e.id == result.id)) {
-                    videos.insert(0, result);
-                  }
-                } else {
-                  if (!images.any((e) => e.id == result.id)) {
-                    images.insert(0, result);
-                  }
-                }
-              });
+            ],
+          ),
+          onTap: () async {
+            if (isSelectionMode) {
+              toggleSelection(asset);
+              return;
             }
 
-            if (action == 'recycle' || action == 'vault') {
-              await _refreshMediaAfterRecycleChange();
-              if (!mounted) return;
-              _showRecycleSnackBar(
-                action == 'vault'
-                    ? 'Moved to Safe Folder'
-                    : 'Moved to recycle bin',
+            _thumbnailWarmupTimer?.cancel();
+            _isViewerTransitioning = true;
+
+            if (asset.type == AssetType.video) {
+              final videoList = visibleImages
+                  .where((e) => e.type == AssetType.video)
+                  .toList();
+              var videoIndex = videoList.indexWhere((e) => e.id == asset.id);
+              if (videoIndex == -1) {
+                videoList.insert(0, asset);
+                videoIndex = 0;
+              }
+
+              final viewerAction = await Navigator.push<String>(
+                context,
+                buildCinematicRoute(
+                  VideoViewerScreen(videos: videoList, initialIndex: videoIndex),
+                ),
               );
-            } else if (action == 'edited') {
-              // For edits, we handle the 'instant' update via _pendingAssets.
-              // We still refresh albums and other metadata, but loadImages 
-              // will now respect our _pendingAssets even if the MediaStore is slow.
-              await Future.wait([
-                loadAlbums(permissionOverride: permissionState),
-                loadImages(permissionOverride: permissionState, showLoading: false),
-                loadVideos(permissionOverride: permissionState, showLoading: false),
-                loadFavorites(),
-                MusicService().fetchMusicsPaged(refresh: true),
-              ]);
+              if ((viewerAction == 'recycle' || viewerAction == 'vault') &&
+                  mounted) {
+                await _refreshMediaAfterRecycleChange();
+                if (!mounted) return;
+                _showRecycleSnackBar(
+                  viewerAction == 'vault'
+                      ? 'Moved to Safe Folder'
+                      : 'Moved to recycle bin',
+                );
+              }
+              // Always refresh favorites when returning from a viewer
+              await loadFavorites();
+            } else {
+              unawaited(precacheImage(previewProvider, context));
+              unawaited(precacheImage(openingProvider, context));
+
+              final dynamic result = await Navigator.push<dynamic>(
+                context,
+                buildCinematicRoute(
+                  ViewerScreen(
+                    images: visibleImages,
+                    index: absoluteIndex,
+                    initialPreviewProvider: previewProvider,
+                    initialViewerProvider: openingProvider,
+                  ),
+                ),
+              );
+
+              if (result != null && mounted) {
+                String? action;
+                if (result is String) {
+                  action = result;
+                } else if (result is AssetEntity) {
+                  action = 'edited';
+                  // Perform a truly instant local update before the background refresh
+                  setState(() {
+                    _pendingAssets.add(result);
+                    if (result.type == AssetType.video) {
+                      if (!videos.any((e) => e.id == result.id)) {
+                        videos.insert(0, result);
+                      }
+                    } else {
+                      if (!images.any((e) => e.id == result.id)) {
+                        images.insert(0, result);
+                      }
+                    }
+                  });
+                }
+
+                if (action == 'recycle' || action == 'vault') {
+                  await _refreshMediaAfterRecycleChange();
+                  if (!mounted) return;
+                  _showRecycleSnackBar(
+                    action == 'vault'
+                        ? 'Moved to Safe Folder'
+                        : 'Moved to recycle bin',
+                  );
+                } else if (action == 'edited') {
+                  // For edits, we handle the 'instant' update via _pendingAssets.
+                  // We still refresh albums and other metadata, but loadImages 
+                  // will now respect our _pendingAssets even if the MediaStore is slow.
+                  await Future.wait([
+                    loadAlbums(permissionOverride: permissionState),
+                    loadImages(
+                      permissionOverride: permissionState,
+                      showLoading: false,
+                    ),
+                    loadVideos(
+                      permissionOverride: permissionState,
+                      showLoading: false,
+                    ),
+                    loadFavorites(),
+                    MusicService().fetchMusicsPaged(refresh: true),
+                  ]);
+                }
+              } else {
+                // Even if result is null, something might have been favorited
+                await loadFavorites();
+              }
             }
-          } else {
-            // Even if result is null, something might have been favorited
-            await loadFavorites();
-          }
-        }
-        if (!mounted) return;
-        _isViewerTransitioning = false;
-        _scheduleThumbnailWarmup();
+            if (!mounted) return;
+            _isViewerTransitioning = false;
+            _scheduleThumbnailWarmup();
+          },
+          onDoubleTap: isRecycleBinTab ? () {} : () => toggleFavorite(asset),
+          onLongPress: () {},
+          onLongPressStart: (_) {
+            _startDragSelection(asset);
+          },
+          onLongPressMoveUpdate: (details) {
+            _updateDragSelection(details.globalPosition, visibleImages);
+          },
+          onLongPressEnd: (_) {
+            _endDragSelection();
+          },
+          isFavorite: !isRecycleBinTab && favorites.contains(asset.id),
+          isAnimating: !isRecycleBinTab && animating.contains(asset.id),
+          isSelected: isSelected,
+          heroTag: asset.id,
+          tileKey: tileKey,
+        );
       },
-      onDoubleTap: isRecycleBinTab ? () {} : () => toggleFavorite(asset),
-      onLongPress: () {},
-      onLongPressStart: (_) {
-        _startDragSelection(asset);
-      },
-      onLongPressMoveUpdate: (details) {
-        _updateDragSelection(details.globalPosition, visibleImages);
-      },
-      onLongPressEnd: (_) {
-        _endDragSelection();
-      },
-      isFavorite: !isRecycleBinTab && favorites.contains(asset.id),
-      isAnimating: !isRecycleBinTab && animating.contains(asset.id),
-      isSelected: isSelected,
-      heroTag: asset.id,
-      tileKey: tileKey,
     );
   }
 
@@ -2878,146 +3271,182 @@ class _GalleryScreenState extends State<GalleryScreen>
             systemNavigationBarContrastEnforced: false,
           );
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      extendBody: true,
-      appBar: AppBar(
-        leading: isSelectionMode
-            ? IconButton(
-                tooltip: 'Close selection',
-                icon: const Icon(Icons.close_rounded),
-                onPressed: clearSelection,
-              )
-            : null,
-        title: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 360),
-          transitionBuilder: (child, animation) {
-            return FadeTransition(
-              opacity: animation,
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0, 0.15),
-                  end: Offset.zero,
-                ).animate(animation),
-                child: child,
-              ),
-            );
+    return ValueListenableBuilder<int>(
+      valueListenable: _selectionCount,
+      builder: (context, count, _) {
+        final isSelectionMode = count > 0;
+
+        return PopScope(
+          canPop: !isSelectionMode && selectedIndex == 0,
+          onPopInvokedWithResult: (didPop, result) {
+            if (didPop) return;
+            if (isSelectionMode) {
+              clearSelection();
+              return;
+            }
+            if (selectedIndex != 0) {
+              setState(() {
+                selectedIndex = 0;
+                _primaryTabIndex = 0;
+                selectedAssetIds.clear();
+                _gridTileKeys.clear();
+              });
+              _notifySelectionChanged();
+              _scheduleStartupThumbnailWarmup();
+            }
           },
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTapDown: isSelectionMode || selectedIndex != 0
-                ? null
-                : (_) => _startVaultEntryPress(),
-            onTapUp: isSelectionMode || selectedIndex != 0
-                ? null
-                : (_) => _cancelVaultEntryPress(),
-            onTapCancel: isSelectionMode || selectedIndex != 0
-                ? null
-                : _cancelVaultEntryPress,
-            child: AnimatedScale(
-              scale: _isVaultEntryPressing ? 0.96 : 1,
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              child: Text(
-                isSelectionMode
-                    ? '${selectedAssetIds.length} selected'
-                    : titles[selectedIndex],
-                key: ValueKey('${selectedIndex}_${selectedAssetIds.length}'),
-              ),
-            ),
-          ),
-        ),
-        backgroundColor: topBarColor,
-        surfaceTintColor: Colors.transparent,
-        systemOverlayStyle: overlayStyle.copyWith(
-          statusBarColor: Colors.transparent,
-          systemNavigationBarColor: Colors.transparent,
-          systemNavigationBarDividerColor: Colors.transparent,
-          systemNavigationBarContrastEnforced: false,
-        ),
-        actions: [
-          if (isSelectionMode) ...[
-            if (selectedIndex == 4)
-              IconButton(
-                tooltip: 'Unfavorite',
-                icon: const Icon(Icons.favorite_rounded),
-                onPressed: unfavoriteSelection,
-              ),
-            if (selectedIndex != 4 && selectedIndex != 5) ...[
-              IconButton(
-                tooltip: 'Favorite',
-                icon: const Icon(Icons.favorite_border_rounded),
-                onPressed: favoriteSelection,
-              ),
-              IconButton(
-                tooltip: 'Move to Safe Folder',
-                icon: const Icon(Icons.lock_outline_rounded),
-                onPressed: moveSelectionToVault,
-              ),
-              IconButton(
-                tooltip: 'Move to Recycle Bin',
-                icon: const Icon(Icons.delete_outline_rounded),
-                onPressed: moveSelectionToRecycleBin,
-              ),
-            ],
-            if (selectedIndex == 5) ...[
-              IconButton(
-                tooltip: 'Restore',
-                icon: const Icon(Icons.restore_rounded),
-                onPressed: isRecycleActionInProgress
-                    ? null
-                    : restoreSelectionFromRecycleBin,
-              ),
-              IconButton(
-                tooltip: 'Delete forever',
-                icon: const Icon(Icons.delete_forever_rounded),
-                onPressed: isRecycleActionInProgress
-                    ? null
-                    : deleteSelectionForever,
-              ),
-            ],
-            IconButton(
-              tooltip: 'Actions',
-              icon: const Icon(Icons.more_vert_rounded),
-              onPressed: _showSelectionMenu,
-            ),
-          ],
-          if (!isSelectionMode) ...[
-            if (selectedIndex == 5)
-              Padding(
-                padding: const EdgeInsets.only(right: 14),
-                child: Center(
-                  child: Text(
-                    'Tap for actions • Swipe restore/delete',
-                    style: TextStyle(
-                      color: colorScheme.onSurface.withValues(alpha: 0.7),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+          child: Scaffold(
+            key: _scaffoldKey,
+            backgroundColor: Colors.transparent,
+            extendBody: true,
+            endDrawer: _buildEndDrawer(context),
+            onEndDrawerChanged: (isOpen) {
+              if (isOpen) {
+                HapticFeedback.selectionClick();
+              }
+            },
+            appBar: PreferredSize(
+              preferredSize: const Size.fromHeight(kToolbarHeight),
+              child: AppBar(
+              leading: isSelectionMode
+                  ? IconButton(
+                      tooltip: 'Close selection',
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: clearSelection,
+                    )
+                  : null,
+              title: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 360),
+                transitionBuilder: (child, animation) {
+                  return FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, 0.15),
+                        end: Offset.zero,
+                      ).animate(animation),
+                      child: child,
+                    ),
+                  );
+                },
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTapDown: isSelectionMode || selectedIndex != 0
+                      ? null
+                      : (_) => _startVaultEntryPress(),
+                  onTapUp: isSelectionMode || selectedIndex != 0
+                      ? null
+                      : (_) => _cancelVaultEntryPress(),
+                  onTapCancel: isSelectionMode || selectedIndex != 0
+                      ? null
+                      : _cancelVaultEntryPress,
+                  child: AnimatedScale(
+                    scale: _isVaultEntryPressing ? 0.96 : 1,
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    child: Text(
+                      isSelectionMode
+                          ? '$count selected'
+                          : titles[selectedIndex],
+                      key: ValueKey('${selectedIndex}_$count'),
                     ),
                   ),
                 ),
               ),
-            Hero(
-              tag: 'search_icon',
-              child: IconButton(
-                tooltip: 'Search',
-                icon: const Icon(Icons.search_rounded),
-                onPressed: () => _openSearch(context),
+              backgroundColor: topBarColor,
+              surfaceTintColor: Colors.transparent,
+              systemOverlayStyle: overlayStyle.copyWith(
+                statusBarColor: Colors.transparent,
+                systemNavigationBarColor: Colors.transparent,
+                systemNavigationBarDividerColor: Colors.transparent,
+                systemNavigationBarContrastEnforced: false,
+              ),
+              actions: [
+                if (isSelectionMode) ...[
+                  if (selectedIndex == 4)
+                    IconButton(
+                      tooltip: 'Unfavorite',
+                      icon: const Icon(Icons.favorite_rounded),
+                      onPressed: unfavoriteSelection,
+                    ),
+                  if (selectedIndex != 4 && selectedIndex != 5) ...[
+                    IconButton(
+                      tooltip: 'Favorite',
+                      icon: const Icon(Icons.favorite_border_rounded),
+                      onPressed: favoriteSelection,
+                    ),
+                    IconButton(
+                      tooltip: 'Move to Safe Folder',
+                      icon: const Icon(Icons.lock_outline_rounded),
+                      onPressed: moveSelectionToVault,
+                    ),
+                    IconButton(
+                      tooltip: 'Move to Recycle Bin',
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      onPressed: moveSelectionToRecycleBin,
+                    ),
+                  ],
+                  if (selectedIndex == 5) ...[
+                    IconButton(
+                      tooltip: 'Restore',
+                      icon: const Icon(Icons.restore_rounded),
+                      onPressed: isRecycleActionInProgress
+                          ? null
+                          : restoreSelectionFromRecycleBin,
+                    ),
+                    IconButton(
+                      tooltip: 'Delete forever',
+                      icon: const Icon(Icons.delete_forever_rounded),
+                      onPressed: isRecycleActionInProgress
+                          ? null
+                          : deleteSelectionForever,
+                    ),
+                  ],
+                  IconButton(
+                    tooltip: 'Actions',
+                    icon: const Icon(Icons.more_vert_rounded),
+                    onPressed: _showSelectionMenu,
+                  ),
+                ],
+                if (!isSelectionMode) ...[
+                  if (selectedIndex == 5)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 14),
+                      child: Center(
+                        child: Text(
+                          'Tap for actions • Swipe restore/delete',
+                          style: TextStyle(
+                            color: colorScheme.onSurface.withValues(alpha: 0.7),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  Hero(
+                    tag: 'search_icon',
+                    child: IconButton(
+                      tooltip: 'Search',
+                      icon: const Icon(Icons.search_rounded),
+                      onPressed: () => _openSearch(context),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Menu',
+                    icon: const Icon(Icons.menu_rounded),
+                    onPressed: () {
+                      if (_scaffoldKey.currentState?.isEndDrawerOpen == true) {
+                        Navigator.pop(context);
+                        return;
+                      }
+                      _scaffoldKey.currentState?.openEndDrawer();
+                    },
+                  ),
+                ],
+              ],
               ),
             ),
-            IconButton(
-              tooltip: isDark ? 'Light mode' : 'Dark mode',
-              icon: Icon(
-                isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
-              ),
-              onPressed: () {
-                context.read<ThemeProvider>().toggleTheme(context);
-              },
-            ),
-          ],
-        ],
-      ),
-      body: Stack(
+            body: Stack(
         children: [
           Container(
             decoration: BoxDecoration(
@@ -3089,8 +3518,8 @@ class _GalleryScreenState extends State<GalleryScreen>
             child: buildBody(visibleImages, colorScheme, isDark),
           ),
         ],
-      ),
-      bottomNavigationBar: SafeArea(
+            ),
+            bottomNavigationBar: SafeArea(
         minimum: const EdgeInsets.fromLTRB(12, 0, 12, 0),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -3121,7 +3550,10 @@ class _GalleryScreenState extends State<GalleryScreen>
             ),
           ],
         ),
-      ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
