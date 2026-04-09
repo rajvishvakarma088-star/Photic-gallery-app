@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'glass_container.dart';
 import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
+import 'services/favorites_database.dart';
 
 class ViewerScreen extends StatefulWidget {
   final List<AssetEntity> images;
@@ -53,6 +54,7 @@ class ViewerScreen extends StatefulWidget {
 class _ViewerScreenState extends State<ViewerScreen> {
   final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
   final VaultService vaultService = VaultService.instance;
+  final FavoritesDatabase favoritesDatabase = FavoritesDatabase.instance;
   late PageController controller;
   final ScrollController thumbnailScrollController = ScrollController();
   final ValueNotifier<int> currentIndexNotifier = ValueNotifier<int>(0);
@@ -77,6 +79,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   bool isDeletingToRecycleBin = false;
   bool showViewerChrome = true;
   int currentIndex = 0;
+  bool isFavorite = false;
   Brightness? _lastAppliedBrightness;
 
   final PhotoViewController photoController = PhotoViewController();
@@ -214,9 +217,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
     SystemChrome.setSystemUIOverlayStyle(
       SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
-        systemNavigationBarColor: isDark
-            ? Colors.black
-            : const Color(0xFFF0E6FF),
+        systemNavigationBarColor: Colors.transparent,
+        systemNavigationBarDividerColor: Colors.transparent,
+        systemNavigationBarContrastEnforced: false,
         statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
         systemNavigationBarIconBrightness: isDark
             ? Brightness.light
@@ -320,9 +323,15 @@ class _ViewerScreenState extends State<ViewerScreen> {
     if (initialViewerProvider != null) {
       providerCache[widget.images[widget.index].id] = initialViewerProvider;
     }
-    scheduleMicrotask(() {
+    scheduleMicrotask(() async {
       if (!mounted) return;
       precacheViewerImage(currentIndex);
+      final favorited = await favoritesDatabase.isFavorite(widget.images[currentIndex].id);
+      if (mounted) {
+        setState(() {
+          isFavorite = favorited;
+        });
+      }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -468,7 +477,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                     backgroundDecoration: const BoxDecoration(
                                       color: Colors.transparent,
                                     ),
-                                    onPageChanged: (index) {
+                                    onPageChanged: (index) async {
                                       currentIndex = index;
                                       currentIndexNotifier.value = index;
                                       warmCurrentThenNeighbors(index);
@@ -478,6 +487,14 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                         setState(() => showViewerChrome = true);
                                       }
                                       syncThumbnailStrip();
+
+                                      final favorited = await favoritesDatabase.isFavorite(widget.images[index].id);
+                                      if (mounted && currentIndex == index) {
+                                        setState(() {
+                                          isFavorite = favorited;
+                                        });
+                                      }
+
                                       // Debounce: ignore the tap that fires
                                       // immediately after a swipe ends
                                       _swipeJustHappened = true;
@@ -781,6 +798,12 @@ class _ViewerScreenState extends State<ViewerScreen> {
           children: [
             _actionIcon(Icons.share_rounded, isDark, shareAsset),
             _actionIcon(Icons.edit_rounded, isDark, editAsset),
+            _actionIcon(
+              isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+              isDark,
+              toggleFavorite,
+              color: isFavorite ? const Color(0xFFE66A74) : null,
+            ),
             _actionIcon(Icons.visibility_off_rounded, isDark, hideAsset),
             _actionIcon(Icons.delete_rounded, isDark, deleteAsset),
           ],
@@ -789,13 +812,39 @@ class _ViewerScreenState extends State<ViewerScreen> {
     );
   }
 
-  Widget _actionIcon(IconData icon, bool isDark, VoidCallback onTap) {
+  Widget _actionIcon(IconData icon, bool isDark, VoidCallback onTap, {Color? color}) {
     return IconButton(
       iconSize: 28,
       padding: EdgeInsets.zero,
-      icon: Icon(icon, color: isDark ? Colors.white : Colors.black87),
+      icon: Icon(icon, color: color ?? (isDark ? Colors.white : Colors.black87)),
       onPressed: onTap,
     );
+  }
+
+  Future<void> toggleFavorite() async {
+    final asset = widget.images[currentIndex];
+    final newState = !isFavorite;
+    
+    // Optimistic UI update
+    setState(() {
+      isFavorite = newState;
+    });
+
+    try {
+      if (newState) {
+        await favoritesDatabase.addFavorite(asset.id);
+      } else {
+        await favoritesDatabase.removeFavorite(asset.id);
+      }
+      HapticFeedback.mediumImpact();
+    } catch (_) {
+      // Revert on error
+      if (mounted) {
+        setState(() {
+          isFavorite = !newState;
+        });
+      }
+    }
   }
 
   AssetEntity get _currentAsset => widget.images[currentIndexNotifier.value];

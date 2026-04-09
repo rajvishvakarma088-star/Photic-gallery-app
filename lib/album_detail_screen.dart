@@ -425,12 +425,28 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
         ),
         actions: [
-          if (isSelectionMode)
+          if (isSelectionMode) ...[
+            IconButton(
+              tooltip: 'Favorite',
+              icon: const Icon(Icons.favorite_border_rounded),
+              onPressed: _toggleFavoriteAll,
+            ),
+            IconButton(
+              tooltip: 'Move to Safe Folder',
+              icon: const Icon(Icons.lock_outline_rounded),
+              onPressed: _moveToVault,
+            ),
+            IconButton(
+              tooltip: 'Move to Recycle Bin',
+              icon: const Icon(Icons.delete_outline_rounded),
+              onPressed: _moveToRecycleBin,
+            ),
             IconButton(
               tooltip: 'Selection actions',
               icon: const Icon(Icons.more_vert_rounded),
               onPressed: _showSelectionMenu,
             ),
+          ],
         ],
       ),
       body: Stack(

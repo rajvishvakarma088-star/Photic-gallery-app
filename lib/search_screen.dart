@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -151,12 +152,9 @@ class _SearchScreenState extends State<SearchScreen> {
             child: GestureDetector(
               onTap: () => Navigator.pop(context),
               child: BackdropFilter(
-                filter: ColorFilter.mode(
-                  Colors.black.withOpacity(isDark ? 0.32 : 0.12),
-                  BlendMode.darken,
-                ),
+                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                 child: Container(
-                  color: Colors.transparent,
+                  color: (isDark ? Colors.black : Colors.white).withOpacity(isDark ? 0.42 : 0.22),
                 ),
               ),
             ),
@@ -166,8 +164,8 @@ class _SearchScreenState extends State<SearchScreen> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               child: GlassContainer(
-                borderRadius: BorderRadius.circular(28),
-                blurSigma: 26,
+                borderRadius: BorderRadius.circular(32),
+                blurSigma: 28,
                 child: Column(
                   children: [
                     _buildSearchBar(isDark, colorScheme),
@@ -188,17 +186,18 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildSearchBar(bool isDark, ColorScheme colorScheme) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
       child: Hero(
         tag: 'search_icon',
         child: Material(
           color: Colors.transparent,
           child: Container(
+            height: 52,
             decoration: BoxDecoration(
-              color: colorScheme.surface.withOpacity(isDark ? 0.08 : 0.42),
-              borderRadius: BorderRadius.circular(30),
+              color: colorScheme.onSurface.withOpacity(isDark ? 0.06 : 0.04),
+              borderRadius: BorderRadius.circular(26),
               border: Border.all(
-                color: Colors.white.withOpacity(0.12),
+                color: (isDark ? Colors.white : Colors.black).withOpacity(0.08),
               ),
             ),
             child: TextField(
@@ -208,33 +207,37 @@ class _SearchScreenState extends State<SearchScreen> {
               onSubmitted: (val) => _saveSearch(val),
               style: TextStyle(
                 color: colorScheme.onSurface,
-                fontSize: 16,
+                fontSize: 17,
                 fontWeight: FontWeight.w500,
+                letterSpacing: -0.2,
               ),
               decoration: InputDecoration(
                 hintText: 'Search photos...',
                 hintStyle: TextStyle(
-                  color: colorScheme.onSurface.withOpacity(0.5),
+                  color: colorScheme.onSurface.withOpacity(0.4),
                   fontWeight: FontWeight.w400,
                 ),
                 prefixIcon: IconButton(
-                  icon: const Icon(Icons.arrow_back_rounded),
+                  icon: const Icon(Icons.arrow_back_rounded, size: 22),
                   onPressed: () => Navigator.pop(context),
+                  color: colorScheme.onSurface.withOpacity(0.7),
                 ),
                 suffixIcon: _currentQuery.isNotEmpty
                     ? IconButton(
-                        icon: const Icon(Icons.close_rounded),
+                        icon: const Icon(Icons.close_rounded, size: 20),
                         onPressed: () {
                           _searchController.clear();
                           _onSearchChanged('');
                         },
+                        color: colorScheme.onSurface.withOpacity(0.7),
                       )
                     : Icon(
                         Icons.search_rounded,
-                        color: colorScheme.onSurface.withOpacity(0.7),
+                        color: colorScheme.onSurface.withOpacity(0.4),
+                        size: 22,
                       ),
                 border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
               ),
             ),
           ),

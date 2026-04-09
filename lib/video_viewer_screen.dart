@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import 'glass_container.dart';
 import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
+import 'services/favorites_database.dart';
 
 class VideoViewerScreen extends StatefulWidget {
   final List<AssetEntity> videos;
@@ -26,11 +27,13 @@ class VideoViewerScreen extends StatefulWidget {
 class _VideoViewerScreenState extends State<VideoViewerScreen> {
   final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
   final VaultService vaultService = VaultService.instance;
+  final FavoritesDatabase favoritesDatabase = FavoritesDatabase.instance;
   final ValueNotifier<double> verticalDragNotifier = ValueNotifier<double>(0);
   final Map<int, VideoPlayerController> _videoControllers = {};
   late PageController pageController;
   late int currentIndex;
   bool isDeletingToRecycleBin = false;
+  bool isFavorite = false;
   bool hideViewerChrome = false;
   bool showViewerChrome = true;
   Brightness? _lastAppliedBrightness;
@@ -40,6 +43,16 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
     super.initState();
     currentIndex = widget.initialIndex;
     pageController = PageController(initialPage: widget.initialIndex);
+    _loadFavoriteStatus();
+  }
+
+  Future<void> _loadFavoriteStatus() async {
+    final favorited = await favoritesDatabase.isFavorite(widget.videos[currentIndex].id);
+    if (mounted) {
+      setState(() {
+        isFavorite = favorited;
+      });
+    }
   }
 
   @override
@@ -56,7 +69,9 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
     SystemChrome.setSystemUIOverlayStyle(
       SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
-        systemNavigationBarColor: Colors.black,
+        systemNavigationBarColor: Colors.transparent,
+        systemNavigationBarDividerColor: Colors.transparent,
+        systemNavigationBarContrastEnforced: false,
         statusBarIconBrightness: Brightness.light,
         systemNavigationBarIconBrightness: Brightness.light,
       ),
@@ -288,6 +303,16 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                             },
                           ),
                           _buildPopupMenuItem(
+                            icon: isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                            title: isFavorite ? 'Remove from Favorites' : 'Add to Favorites',
+                            isDark: isDark,
+                            color: isFavorite ? const Color(0xFFE66A74) : null,
+                            onTap: () {
+                              Navigator.pop(dialogContext);
+                              toggleFavorite();
+                            },
+                          ),
+                          _buildPopupMenuItem(
                             icon: Icons.speed_rounded,
                             title: 'Playback Speed',
                             isDark: isDark,
@@ -360,9 +385,10 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
     required bool isDark,
     required VoidCallback onTap,
     bool isDestructive = false,
+    Color? color,
   }) {
-    final textColor = isDark ? Colors.white : const Color(0xFF221B34);
-    final accentColor = isDestructive ? const Color(0xFFE66A74) : textColor;
+    final textColor = color ?? (isDestructive ? const Color(0xFFE66A74) : (isDark ? Colors.white : const Color(0xFF221B34)));
+    final accentColor = textColor;
 
     return InkWell(
       onTap: () {
@@ -523,6 +549,32 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
       if (mounted) {
         setState(() {
           isDeletingToRecycleBin = false;
+        });
+      }
+    }
+  }
+
+  Future<void> toggleFavorite() async {
+    final asset = widget.videos[currentIndex];
+    final newState = !isFavorite;
+
+    // Optimistic UI update
+    setState(() {
+      isFavorite = newState;
+    });
+
+    try {
+      if (newState) {
+        await favoritesDatabase.addFavorite(asset.id);
+      } else {
+        await favoritesDatabase.removeFavorite(asset.id);
+      }
+      HapticFeedback.mediumImpact();
+    } catch (_) {
+      // Revert on error
+      if (mounted) {
+        setState(() {
+          isFavorite = !newState;
         });
       }
     }
@@ -774,6 +826,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
           ),
 
           GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onTap: () {
               setState(() {
                 showViewerChrome = !showViewerChrome;
@@ -823,6 +876,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                               currentIndex = idx;
                               showViewerChrome = true;
                             });
+                            _loadFavoriteStatus();
                           },
                           itemBuilder: (context, idx) {
                             final asset = widget.videos[idx];

@@ -51,8 +51,6 @@ dependencies:
   latlong2: ^0.9.1
   pro_image_editor: ^12.0.13
   share_plus: ^12.0.2
-  google_mlkit_image_labeling: ^0.14.2
-  google_mlkit_face_detection: ^0.13.2
   just_audio: ^0.9.38
   audio_service: ^0.18.14
   flutter_media_metadata: ^1.0.0+1

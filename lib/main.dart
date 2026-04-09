@@ -6,6 +6,13 @@ import 'gallery_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+
   PaintingBinding.instance.imageCache.maximumSize = 320;
   PaintingBinding.instance.imageCache.maximumSizeBytes = 160 << 20;
 
@@ -29,12 +36,16 @@ class MyApp extends StatelessWidget {
 
     final overlayStyle = isDark
         ? SystemUiOverlayStyle.light.copyWith(
-            statusBarColor: const Color(0xFF120C24),
-            systemNavigationBarColor: const Color(0xFF120C24),
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            systemNavigationBarContrastEnforced: false,
           )
         : SystemUiOverlayStyle.dark.copyWith(
-            statusBarColor: const Color(0xFFF1E8FF),
-            systemNavigationBarColor: const Color(0xFFF1E8FF),
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            systemNavigationBarContrastEnforced: false,
           );
 
     return ThemeData(
