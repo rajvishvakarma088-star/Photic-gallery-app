@@ -108,9 +108,25 @@ Widget buildGalleryGridTile({
   );
 
   return RepaintBoundary(
-    child: GestureDetector(
-      key: tileKey,
-      onTap: onTap,
+    child: TweenAnimationBuilder<double>(
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOutQuart,
+      tween: Tween<double>(begin: 0.0, end: 1.0),
+      builder: (context, value, child) {
+        return Opacity(
+          opacity: value,
+          child: Transform.translate(
+            offset: Offset(0, 20 * (1 - value)),
+            child: Transform.scale(
+              scale: 0.85 + (0.15 * value),
+              child: child,
+            ),
+          ),
+        );
+      },
+      child: GestureDetector(
+        key: tileKey,
+        onTap: onTap,
       onDoubleTap: onDoubleTap,
       onLongPress: onLongPress,
       onLongPressStart: onLongPressStart,
@@ -228,5 +244,6 @@ Widget buildGalleryGridTile({
         },
       ),
     ),
-  );
+  ),
+);
 }

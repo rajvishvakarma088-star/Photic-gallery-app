@@ -377,6 +377,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                     _buildSettingsTile(
                       context: context,
+                      icon: Icons.refresh_rounded,
+                      title: 'Pull to Refresh',
+                      subtitle: 'Enable elastic rubber-band refresh',
+                      iconColor: isDark ? const Color(0xFF9080CF) : const Color(0xFF6F3CD2),
+                      iconBgColor: isDark ? const Color(0xFF282542) : const Color(0xFFEDE4FF),
+                      trailing: Switch(
+                        value: settings.pullToRefreshEnabled,
+                        onChanged: (value) {
+                          ref.read(settingsProvider.notifier).togglePullToRefresh(value);
+                        },
+                      ),
+                      onTap: () {},
+                    ),
+                    _buildSettingsTile(
+                      context: context,
                       icon: Icons.info_outline_rounded,
                       title: 'Show File Info',
                       subtitle: 'Display size and date on thumbnails',

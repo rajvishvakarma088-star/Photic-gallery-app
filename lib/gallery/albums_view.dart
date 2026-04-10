@@ -3,6 +3,7 @@ import 'package:photo_manager/photo_manager.dart';
 import '../glass_container.dart';
 import '../services/gallery_service.dart';
 import 'gallery_album_widgets.dart' as gallery_album_widgets;
+import 'premium_refresh_control.dart';
 
 class AlbumsView extends StatelessWidget {
   final bool isLoadingAlbums;
@@ -12,6 +13,7 @@ class AlbumsView extends StatelessWidget {
   final bool isDark;
   final Widget Function(AssetEntity asset, {int thumbPx}) buildImage;
   final Future<void> Function(AlbumSummary album) onAlbumTap;
+  final Future<void> Function()? onRefresh;
 
   const AlbumsView({
     super.key,
@@ -22,6 +24,7 @@ class AlbumsView extends StatelessWidget {
     required this.isDark,
     required this.buildImage,
     required this.onAlbumTap,
+    this.onRefresh,
   });
 
   @override
@@ -52,9 +55,11 @@ class AlbumsView extends StatelessWidget {
 
     return CustomScrollView(
       controller: albumsScrollController,
-      physics: const BouncingScrollPhysics(),
+      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
       cacheExtent: 1400,
       slivers: [
+        if (onRefresh != null)
+          PremiumRefreshControl(onRefresh: onRefresh!),
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),

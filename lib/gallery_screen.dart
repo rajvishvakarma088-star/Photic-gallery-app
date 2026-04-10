@@ -13,6 +13,7 @@ import 'gallery/gallery_section.dart';
 import 'gallery/gallery_section_builder.dart';
 import 'gallery/albums_view.dart';
 import 'gallery/gallery_album_widgets.dart' as gallery_album_widgets;
+import 'gallery/premium_refresh_control.dart';
 import 'glass_container.dart';
 import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
@@ -132,6 +133,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   DateTime? _lastBackgroundedAt;
   bool _shouldRefreshOnResume = false;
   static const Duration _resumeRefreshThreshold = Duration(minutes: 2);
+  Timer? _mediaChangeDebounce;
 
   bool get _isPinching => _activePointers >= 2;
   bool get isSelectionMode => selectedAssetIds.isNotEmpty;
@@ -208,11 +210,17 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     loadFavorites();
     unawaited(loadRecycleBin());
     unawaited(loadInitialMediaData());
+    
+    PhotoManager.startChangeNotify();
+    PhotoManager.addChangeCallback(_handleMediaChange);
   }
 
   @override
   void dispose() {
+    PhotoManager.removeChangeCallback(_handleMediaChange);
+    PhotoManager.stopChangeNotify();
     WidgetsBinding.instance.removeObserver(this);
+    _mediaChangeDebounce?.cancel();
     _thumbnailWarmupTimer?.cancel();
     _dragAutoScrollTimer?.cancel();
     _vaultHoldTimer?.cancel();
@@ -269,15 +277,47 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     unawaited(_refreshMediaSilentlyAfterResume());
   }
 
+  bool _isSilentlyRefreshing = false;
+
   Future<void> _refreshMediaSilentlyAfterResume() async {
-    service.clearCache();
-    await Future.wait([
-      loadAlbums(permissionOverride: permissionState),
-      loadImages(permissionOverride: permissionState, showLoading: false),
-      loadVideos(permissionOverride: permissionState, showLoading: false),
-      loadFavorites(),
-      loadRecycleBin(),
-    ]);
+    if (permissionState == null || !permissionState!.hasAccess) return;
+    if (_isSilentlyRefreshing) return;
+    _isSilentlyRefreshing = true;
+    try {
+      service.clearCache();
+      final galleryPageToKeep = currentPage;
+      final videoPageToKeep = currentVideoPage;
+      
+      await Future.wait([
+        loadAlbums(permissionOverride: permissionState),
+        loadImages(
+          permissionOverride: permissionState, 
+          showLoading: false, 
+          targetPage: galleryPageToKeep,
+        ),
+        loadVideos(
+          permissionOverride: permissionState, 
+          showLoading: false,
+          targetPage: videoPageToKeep,
+        ),
+        loadFavorites(),
+        loadRecycleBin(),
+      ]);
+    } finally {
+      if (mounted) {
+        _isSilentlyRefreshing = false;
+      }
+    }
+  }
+
+  void _handleMediaChange(MethodCall call) {
+    if (!mounted) return;
+    _mediaChangeDebounce?.cancel();
+    _mediaChangeDebounce = Timer(const Duration(milliseconds: 650), () {
+      if (mounted) {
+        unawaited(_refreshMediaSilentlyAfterResume());
+      }
+    });
   }
 
   void _startVaultEntryPress() {
@@ -1474,14 +1514,15 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     );
   }
 
-  Widget buildRecycleBinListView(ColorScheme colorScheme) {
+  Widget buildRecycleBinListView(ColorScheme colorScheme, {Future<void> Function()? onRefresh}) {
     return CustomScrollView(
       controller: recycleBinScrollController,
-      physics: const BouncingScrollPhysics(),
+      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
       cacheExtent: 1400,
       slivers: [
+        if (onRefresh != null) PremiumRefreshControl(onRefresh: onRefresh),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 120),
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 120),
           sliver: SliverFixedExtentList(
             itemExtent: 116,
             delegate: SliverChildBuilderDelegate((context, index) {
@@ -2445,8 +2486,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 320),
             curve: Curves.easeOutCubic,
-            height: 62,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            height: 58,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             decoration: BoxDecoration(
               color: isActive
                   ? (isDark
@@ -2497,10 +2538,10 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
                 Icon(
                   isActive ? item.activeIcon : item.icon,
                   color: isActive ? activeColor : inactiveColor,
-                  size: isActive ? 30 : 26,
+                  size: isActive ? 24 : 22,
                 ),
                 if (isActive) ...[
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 4),
                   Flexible(
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 200),
@@ -2510,13 +2551,14 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
                         item.label,
                         key: ValueKey(item.label),
                         maxLines: 1,
-                        overflow: TextOverflow.clip,
+                        overflow: TextOverflow.visible,
+                        softWrap: false,
                         style: TextStyle(
                           color: isActive
                               ? (isDark ? activeColor : const Color(0xFF121212))
                               : inactiveColor,
-                          fontWeight: isActive ? FontWeight.w900 : FontWeight.w800,
-                          fontSize: 14,
+                          fontWeight: isActive ? FontWeight.w700 : FontWeight.w600,
+                          fontSize: 13,
                           letterSpacing: -0.2,
                         ),
                       ),
@@ -3029,8 +3071,9 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   Widget buildGridView(
     List<AssetEntity> visibleImages,
     ColorScheme colorScheme,
-    ScrollController controller,
-  ) {
+    ScrollController controller, {
+    Future<void> Function()? onRefresh,
+  }) {
     final sections = buildSections(visibleImages);
     final indexByAssetId = <String, int>{
       for (var i = 0; i < visibleImages.length; i++) visibleImages[i].id: i,
@@ -3059,8 +3102,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
             }, childCount: sections[sectionIndex].items.length),
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: galleryGridCount,
-              mainAxisSpacing: 6,
-              crossAxisSpacing: 6,
+              mainAxisSpacing: 4,
+              crossAxisSpacing: 4,
               childAspectRatio: 1,
             ),
           ),
@@ -3159,10 +3202,12 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           cacheExtent: 600,
           physics: _isPinching
               ? const NeverScrollableScrollPhysics()
-              : const BouncingScrollPhysics(),
+              : const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
           slivers: [
+            if (onRefresh != null)
+              PremiumRefreshControl(onRefresh: onRefresh),
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(10, 2, 10, 110),
+              padding: const EdgeInsets.fromLTRB(4, 2, 4, 110),
               sliver: SliverMainAxisGroup(slivers: slivers),
             ),
           ],
@@ -3175,6 +3220,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     List<AssetEntity> visibleImages,
     ColorScheme colorScheme,
     bool isDark,
+    SettingsState settings,
   ) {
     if (selectedIndex == 3) {
       return KeyedSubtree(
@@ -3187,13 +3233,31 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           isDark: isDark,
           buildImage: buildImage,
           onAlbumTap: (album) => _openAlbum(album),
+          onRefresh: settings.pullToRefreshEnabled 
+            ? () async {
+              HapticFeedback.mediumImpact();
+              PhotoManager.clearFileCache();
+              await loadAlbums(permissionOverride: permissionState);
+            }
+            : null,
         ),
       );
     }
     if (selectedIndex == 2) {
       return KeyedSubtree(
         key: const ValueKey('tab-favorites-view'),
-        child: buildGridView(visibleImages, colorScheme, favoritesScrollController),
+        child: buildGridView(
+          visibleImages, 
+          colorScheme, 
+          favoritesScrollController,
+          onRefresh: settings.pullToRefreshEnabled 
+            ? () async {
+              HapticFeedback.mediumImpact();
+              PhotoManager.clearFileCache();
+              await _refreshMediaSilentlyAfterResume();
+            }
+            : null,
+        ),
       );
     }
     if (selectedIndex == 4) {
@@ -3220,7 +3284,16 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
       }
       return KeyedSubtree(
         key: const ValueKey('tab-recycle-list-view'),
-        child: buildRecycleBinListView(colorScheme),
+        child: buildRecycleBinListView(
+          colorScheme,
+          onRefresh: settings.pullToRefreshEnabled
+            ? () async {
+              HapticFeedback.mediumImpact();
+              PhotoManager.clearFileCache();
+              await loadRecycleBin();
+            }
+            : null,
+        ),
       );
     }
     if ((selectedIndex == 0 && isLoading) ||
@@ -3323,7 +3396,18 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
 
     return KeyedSubtree(
       key: ValueKey('tab-grid-view-$selectedIndex'),
-      child: buildGridView(visibleImages, colorScheme, currentController),
+      child: buildGridView(
+        visibleImages, 
+        colorScheme, 
+        currentController,
+        onRefresh: settings.pullToRefreshEnabled
+          ? () async {
+            HapticFeedback.mediumImpact();
+            PhotoManager.clearFileCache();
+            await _refreshMediaSilentlyAfterResume();
+          }
+          : null,
+      ),
     );
   }
 
@@ -3638,7 +3722,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
                 ),
               );
             },
-            child: buildBody(visibleImages, colorScheme, isDark),
+            child: buildBody(visibleImages, colorScheme, isDark, settings),
           ),
         ],
       ),

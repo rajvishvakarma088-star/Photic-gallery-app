@@ -24,7 +24,7 @@ class GalleryService {
   AssetPathEntity? _allVideosPathCache;
   AssetPathEntity? _allMediaPathCache;
   List<AssetEntity>? _allAssetsCache;
-  final FilterOptionGroup _galleryFilter = FilterOptionGroup(
+  FilterOptionGroup get _galleryFilter => FilterOptionGroup(
     orders: const [
       OrderOption(type: OrderOptionType.createDate, asc: false),
       OrderOption(type: OrderOptionType.updateDate, asc: false),

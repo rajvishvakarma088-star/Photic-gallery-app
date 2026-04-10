@@ -230,6 +230,15 @@ class _SearchScreenState extends State<SearchScreen> {
     unawaited(_saveSearch(label));
   }
 
+  Route<T> buildCinematicRoute<T>(Widget page) {
+    return PageRouteBuilder<T>(
+      opaque: false,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+      pageBuilder: (context, animation, secondaryAnimation) => page,
+    );
+  }
+
   void _onAssetTap(AssetEntity asset) {
     unawaited(_saveSearch(_currentQuery));
     if (asset.type == AssetType.video) {
@@ -239,8 +248,8 @@ class _SearchScreenState extends State<SearchScreen> {
       final index = relevantVideos.indexWhere((entry) => entry.id == asset.id);
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (context) => VideoViewerScreen(
+        buildCinematicRoute(
+          VideoViewerScreen(
             videos: relevantVideos,
             initialIndex: index < 0 ? 0 : index,
           ),
@@ -250,12 +259,20 @@ class _SearchScreenState extends State<SearchScreen> {
     }
 
     final index = _filteredAssets.indexWhere((entry) => entry.id == asset.id);
+    final previewProvider = _thumbnailProviderFor(asset);
+    final openingProvider = ViewerScreen.openingImageProvider(context, asset);
+    
+    unawaited(precacheImage(previewProvider, context));
+    unawaited(precacheImage(openingProvider, context));
+
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => ViewerScreen(
+      buildCinematicRoute(
+        ViewerScreen(
           images: _filteredAssets,
           index: index < 0 ? 0 : index,
+          initialPreviewProvider: previewProvider,
+          initialViewerProvider: openingProvider,
         ),
       ),
     );
@@ -446,12 +463,12 @@ class _SearchScreenState extends State<SearchScreen> {
   Widget _buildSuggestions(ColorScheme colorScheme) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(4),
       physics: const BouncingScrollPhysics(),
       children: [
         if (_recentSearches.isNotEmpty) ...[
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 12),
+            padding: const EdgeInsets.all(8),
             child: Text(
               'Recent Searches',
               style: TextStyle(
@@ -620,13 +637,13 @@ class _SearchScreenState extends State<SearchScreen> {
         Expanded(
           child: GridView.builder(
             controller: _resultsScrollController,
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 100),
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 100),
             physics: const BouncingScrollPhysics(),
             cacheExtent: 900,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 3,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
+              crossAxisSpacing: 4,
+              mainAxisSpacing: 4,
             ),
             itemCount: _filteredAssets.length,
             itemBuilder: (context, index) {

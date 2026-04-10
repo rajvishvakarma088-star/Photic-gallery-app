@@ -16,6 +16,7 @@ class SettingsState {
   final bool aiTagging;
   final bool smartGrouping;
   final bool duplicateDetection;
+  final bool pullToRefreshEnabled;
 
   const SettingsState({
     this.themeMode = ThemeMode.system,
@@ -31,6 +32,7 @@ class SettingsState {
     this.aiTagging = true,
     this.smartGrouping = false,
     this.duplicateDetection = false,
+    this.pullToRefreshEnabled = true,
   });
 
   SettingsState copyWith({
@@ -47,6 +49,7 @@ class SettingsState {
     bool? aiTagging,
     bool? smartGrouping,
     bool? duplicateDetection,
+    bool? pullToRefreshEnabled,
   }) {
     return SettingsState(
       themeMode: themeMode ?? this.themeMode,
@@ -62,6 +65,7 @@ class SettingsState {
       aiTagging: aiTagging ?? this.aiTagging,
       smartGrouping: smartGrouping ?? this.smartGrouping,
       duplicateDetection: duplicateDetection ?? this.duplicateDetection,
+      pullToRefreshEnabled: pullToRefreshEnabled ?? this.pullToRefreshEnabled,
     );
   }
   bool isDark(BuildContext context) {
@@ -79,6 +83,7 @@ class SettingsNotifier extends Notifier<SettingsState> {
   static const _showHiddenKey = 'settings_show_hidden';
   static const _animationsEnabledKey = 'settings_animations_enabled';
   static const _gridSizeKey = 'settings_grid_size';
+  static const _pullToRefreshKey = 'settings_pull_to_refresh';
 
   SharedPreferences? _prefs;
 
@@ -99,6 +104,7 @@ class SettingsNotifier extends Notifier<SettingsState> {
     final showHidden = _prefs!.getBool(_showHiddenKey) ?? false;
     final animationsEnabled = _prefs!.getBool(_animationsEnabledKey) ?? true;
     final gridSize = _prefs!.getDouble(_gridSizeKey) ?? 3.0;
+    final pullToRefresh = _prefs!.getBool(_pullToRefreshKey) ?? true;
 
     state = state.copyWith(
       themeMode: ThemeMode.values[themeModeIndex],
@@ -107,6 +113,7 @@ class SettingsNotifier extends Notifier<SettingsState> {
       showHidden: showHidden,
       animationsEnabled: animationsEnabled,
       gridSize: gridSize,
+      pullToRefreshEnabled: pullToRefresh,
     );
   }
 
@@ -138,6 +145,11 @@ class SettingsNotifier extends Notifier<SettingsState> {
   void updateGridSize(double size) {
     state = state.copyWith(gridSize: size);
     _prefs?.setDouble(_gridSizeKey, size);
+  }
+
+  void togglePullToRefresh(bool enabled) {
+    state = state.copyWith(pullToRefreshEnabled: enabled);
+    _prefs?.setBool(_pullToRefreshKey, enabled);
   }
 
   void toggleAiTagging(bool enabled) {
