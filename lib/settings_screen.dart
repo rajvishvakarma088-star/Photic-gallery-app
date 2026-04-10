@@ -194,7 +194,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'by lacoblonut01 & Raj',
+                      'by Raj Vishvakarma',
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
