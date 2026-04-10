@@ -17,20 +17,30 @@ Widget buildGallerySectionHeader(
             horizontal: 10,
             vertical: 6,
           ),
-          decoration: BoxDecoration(
-            color: colorScheme.surface.withOpacity(0.28),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.22),
+            decoration: BoxDecoration(
+              color: colorScheme.surface.withValues(alpha: 0.8),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: (colorScheme.brightness == Brightness.dark ? Colors.white : Colors.black)
+                    .withValues(alpha: 0.1),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
-          ),
           child: Text(
             section.title,
             style: TextStyle(
-              color: colorScheme.onSurface,
+              color: colorScheme.brightness == Brightness.dark 
+                  ? colorScheme.onSurface 
+                  : const Color(0xFF1A1A1A),
               fontSize: 15,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.1,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.2,
             ),
           ),
         ),
@@ -116,7 +126,23 @@ Widget buildGalleryGridTile({
             child: Stack(
               fit: StackFit.expand,
               children: [
-                imageChild,
+                Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                    border: Border.all(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      width: 1,
+                    ),
+                  ),
+                  child: imageChild,
+                ),
                 if (isSelected)
                   Positioned.fill(
                     child: TweenAnimationBuilder<double>(

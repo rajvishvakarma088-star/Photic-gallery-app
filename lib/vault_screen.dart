@@ -1,28 +1,29 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:chewie/chewie.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
 import 'glass_container.dart';
 import 'services/screenshot_protection_service.dart';
 import 'services/vault_database.dart';
 import 'services/vault_service.dart';
-import 'theme_provider.dart';
+import 'providers/settings_provider.dart';
 import 'utils/fast_page_scroll_physics.dart';
 
-class VaultScreen extends StatefulWidget {
+class VaultScreen extends ConsumerStatefulWidget {
   const VaultScreen({super.key});
 
   @override
-  State<VaultScreen> createState() => _VaultScreenState();
+  ConsumerState<VaultScreen> createState() => _VaultScreenState();
 }
 
-class _VaultScreenState extends State<VaultScreen> with WidgetsBindingObserver {
+class _VaultScreenState extends ConsumerState<VaultScreen> with WidgetsBindingObserver {
   final VaultService vaultService = VaultService.instance;
   List<VaultItem> _items = [];
   bool _isLoading = true;
@@ -503,22 +504,39 @@ class _VaultScreenState extends State<VaultScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final themeProvider = context.watch<ThemeProvider>();
-    final isDark = themeProvider.isDark(context);
+    final settings = ref.watch(settingsProvider);
+    final isDark = settings.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
     final topBarColor = isDark
-        ? const Color(0xFF120C24)
-        : const Color(0xFFF1E8FF);
+        ? const Color(0xFF0A0A0A)
+        : const Color(0xFFFBFBFB);
     final visibleItems = _selectedTab == 0 ? _photos : _videos;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
-        backgroundColor: topBarColor,
+        backgroundColor: Colors.transparent,
         title: _isSelectionMode
             ? Text('${_selectedItemIds.length} selected')
             : const Text('Safe Folder'),
         surfaceTintColor: Colors.transparent,
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              decoration: BoxDecoration(
+                color: topBarColor.withValues(alpha: isDark ? 0.75 : 0.82),
+                border: Border(
+                  bottom: BorderSide(
+                    color: (isDark ? Colors.white : Colors.black)
+                        .withValues(alpha: isDark ? 0.1 : 0.06),
+                    width: 1.0,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
         systemOverlayStyle:
             (isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
                 .copyWith(statusBarColor: topBarColor),
@@ -550,14 +568,14 @@ class _VaultScreenState extends State<VaultScreen> with WidgetsBindingObserver {
               gradient: LinearGradient(
                 colors: isDark
                     ? const [
-                        Color(0xFF120C24),
-                        Color(0xFF1E163A),
-                        Color(0xFF2C1F52),
+                        Color(0xFF050505),
+                        Color(0xFF080808),
+                        Color(0xFF0C0C0C),
                       ]
                     : const [
-                        Color(0xFFF0E5FF),
-                        Color(0xFFE4D3FF),
-                        Color(0xFFD5BDFF),
+                        Color(0xFFFFFFFF),
+                        Color(0xFFF9F9F9),
+                        Color(0xFFF0F0F0),
                       ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -815,7 +833,7 @@ class _VaultTabButton extends StatelessWidget {
   }
 }
 
-class VaultPreviewScreen extends StatefulWidget {
+class VaultPreviewScreen extends ConsumerStatefulWidget {
   const VaultPreviewScreen({
     super.key,
     required this.item,
@@ -828,10 +846,10 @@ class VaultPreviewScreen extends StatefulWidget {
   final int initialIndex;
 
   @override
-  State<VaultPreviewScreen> createState() => _VaultPreviewScreenState();
+  ConsumerState<VaultPreviewScreen> createState() => _VaultPreviewScreenState();
 }
 
-class _VaultPreviewScreenState extends State<VaultPreviewScreen> {
+class _VaultPreviewScreenState extends ConsumerState<VaultPreviewScreen> {
   VideoPlayerController? _videoController;
   ChewieController? _chewieController;
   late PageController _pageController;
@@ -904,7 +922,7 @@ class _VaultPreviewScreenState extends State<VaultPreviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = context.watch<ThemeProvider>().isDark(context);
+    final isDark = ref.watch(settingsProvider).isDark(context);
 
     return ValueListenableBuilder<double>(
       valueListenable: verticalDragNotifier,

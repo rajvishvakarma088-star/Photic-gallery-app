@@ -1,21 +1,21 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 import 'glass_container.dart';
 import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
 import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
-import 'theme_provider.dart';
-import 'utils/lru_cache.dart';
+import 'providers/settings_provider.dart';
 import 'video_viewer_screen.dart';
 import 'viewer_screen.dart';
 
-class AlbumDetailScreen extends StatefulWidget {
+class AlbumDetailScreen extends ConsumerStatefulWidget {
   const AlbumDetailScreen({
     super.key,
     required this.title,
@@ -28,10 +28,10 @@ class AlbumDetailScreen extends StatefulWidget {
   final List<AssetEntity> images;
 
   @override
-  State<AlbumDetailScreen> createState() => _AlbumDetailScreenState();
+  ConsumerState<AlbumDetailScreen> createState() => _AlbumDetailScreenState();
 }
 
-class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
+class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   // ── Pinch constants (exact copy of gallery_screen) ─────────────────────────
   static const double pinchStepOutThreshold = 1.07;
   static const double pinchStepInThreshold = 0.93;
@@ -51,8 +51,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   final ScrollController _videoScrollController = ScrollController();
 
   // Shared thumbnail cache keyed by  "${assetId}@${px}"
-  final LruMap<String, AssetEntityImageProvider> _thumbCache =
-      LruMap<String, AssetEntityImageProvider>(_maxThumbCacheEntries);
+  final Map<String, AssetEntityImageProvider> _thumbCache = {};
 
   // Grid-tile GlobalKeys – prefixed with tab index to avoid duplicate-key
   // errors when the same asset appears in both Photos and Videos tabs.
@@ -216,6 +215,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             thumbnailFormat: ThumbnailFormat.jpeg,
           ),
         );
+        if (_thumbCache.length > _maxThumbCacheEntries) {
+          _thumbCache.remove(_thumbCache.keys.first);
+        }
         unawaited(precacheImage(provider, context));
       }
     }
@@ -397,6 +399,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         thumbnailFormat: ThumbnailFormat.jpeg,
       ),
     );
+    if (_thumbCache.length > _maxThumbCacheEntries) {
+      _thumbCache.remove(_thumbCache.keys.first);
+    }
     return Image(
       image: provider,
       fit: BoxFit.cover,
@@ -416,10 +421,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final themeProvider = context.watch<ThemeProvider>();
-    final isDark = themeProvider.isDark(context);
+    final settings = ref.watch(settingsProvider);
+    final isDark = settings.isDark(context);
     final topBarColor =
-        isDark ? const Color(0xFF120C24) : const Color(0xFFF1E8FF);
+        isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFBFBFB);
     final overlayStyle =
         isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark;
 
@@ -452,8 +457,25 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             key: ValueKey('${widget.title}-${selectedAssetIds.length}'),
           ),
         ),
-        backgroundColor: topBarColor,
+        backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              decoration: BoxDecoration(
+                color: topBarColor.withValues(alpha: isDark ? 0.75 : 0.82),
+                border: Border(
+                  bottom: BorderSide(
+                    color: (isDark ? Colors.white : Colors.black)
+                        .withValues(alpha: isDark ? 0.1 : 0.06),
+                    width: 1.0,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
         systemOverlayStyle: overlayStyle.copyWith(
           statusBarColor: topBarColor,
           statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
@@ -483,7 +505,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           ],
         ],
       ),
-      body: Stack(
+      body: Listener(
+        onPointerDown: (_) {
+          if (_dragAutoScrollTimer != null) {
+            _dragAutoScrollTimer?.cancel();
+            _dragAutoScrollTimer = null;
+          }
+        },
+        child: Stack(
         children: [
           // Background gradient
           Container(
@@ -491,14 +520,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
               gradient: LinearGradient(
                 colors: isDark
                     ? const [
-                        Color(0xFF120C24),
-                        Color(0xFF1E163A),
-                        Color(0xFF2C1F52),
+                        Color(0xFF050505),
+                        Color(0xFF080808),
+                        Color(0xFF0C0C0C),
                       ]
                     : const [
-                        Color(0xFFF0E5FF),
-                        Color(0xFFE4D3FF),
-                        Color(0xFFD5BDFF),
+                        Color(0xFFFFFFFF),
+                        Color(0xFFF9F9F9),
+                        Color(0xFFF0F0F0),
                       ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -515,8 +544,8 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                 height: 210,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFFA855F7)
-                      .withOpacity(isDark ? 0.18 : 0.24),
+                  color: const Color(0xFF8B5CF6)
+                      .withValues(alpha: isDark ? 0.04 : 0.08),
                 ),
               ),
             ),
@@ -531,8 +560,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ══════════════════════════════════════════════════════════════════════════
   // Pinch wrapper – exact copy of gallery_screen's buildGridView Listener +
@@ -542,6 +572,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Widget _buildPinchWrapper(bool isDark) {
     return Listener(
       onPointerDown: (_) {
+        if (_dragAutoScrollTimer != null) {
+          _dragAutoScrollTimer?.cancel();
+          _dragAutoScrollTimer = null;
+        }
         final was = _isPinching;
         _activePointers++;
         if (!was && _isPinching) setState(() {});
@@ -727,6 +761,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
             thumbnailFormat: ThumbnailFormat.jpeg,
           ),
         );
+        if (_thumbCache.length > _maxThumbCacheEntries) {
+          _thumbCache.remove(_thumbCache.keys.first);
+        }
 
         return RepaintBoundary(
           child: GestureDetector(

@@ -1,25 +1,26 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'glass_container.dart';
 import 'services/screenshot_protection_service.dart';
 import 'services/vault_service.dart';
-import 'theme_provider.dart';
+import 'providers/settings_provider.dart';
 import 'vault_screen.dart';
 
 enum _VaultPinStage { create, confirm, unlock }
 
-class VaultLockScreen extends StatefulWidget {
+class VaultLockScreen extends ConsumerStatefulWidget {
   const VaultLockScreen({super.key});
 
   @override
-  State<VaultLockScreen> createState() => _VaultLockScreenState();
+  ConsumerState<VaultLockScreen> createState() => _VaultLockScreenState();
 }
 
-class _VaultLockScreenState extends State<VaultLockScreen>
+class _VaultLockScreenState extends ConsumerState<VaultLockScreen>
     with SingleTickerProviderStateMixin {
   final VaultService vaultService = VaultService.instance;
   late final AnimationController _shakeController;
@@ -209,19 +210,36 @@ class _VaultLockScreenState extends State<VaultLockScreen>
 
   @override
   Widget build(BuildContext context) {
-    final themeProvider = context.watch<ThemeProvider>();
-    final isDark = themeProvider.isDark(context);
+    final settings = ref.watch(settingsProvider);
+    final isDark = settings.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
     final topBarColor = isDark
-        ? const Color(0xFF120C24)
-        : const Color(0xFFF1E8FF);
+        ? const Color(0xFF0A0A0A)
+        : const Color(0xFFFBFBFB);
 
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
-        backgroundColor: topBarColor,
+        backgroundColor: Colors.transparent,
         title: const Text('Safe Folder'),
         surfaceTintColor: Colors.transparent,
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              decoration: BoxDecoration(
+                color: topBarColor.withValues(alpha: isDark ? 0.75 : 0.82),
+                border: Border(
+                  bottom: BorderSide(
+                    color: (isDark ? Colors.white : Colors.black)
+                        .withValues(alpha: isDark ? 0.1 : 0.06),
+                    width: 1.0,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
         systemOverlayStyle:
             (isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
                 .copyWith(statusBarColor: topBarColor),
@@ -233,14 +251,14 @@ class _VaultLockScreenState extends State<VaultLockScreen>
               gradient: LinearGradient(
                 colors: isDark
                     ? const [
-                        Color(0xFF120C24),
-                        Color(0xFF1E163A),
-                        Color(0xFF2C1F52),
+                        Color(0xFF050505),
+                        Color(0xFF080808),
+                        Color(0xFF0C0C0C),
                       ]
                     : const [
-                        Color(0xFFF0E5FF),
-                        Color(0xFFE4D3FF),
-                        Color(0xFFD5BDFF),
+                        Color(0xFFFFFFFF),
+                        Color(0xFFF9F9F9),
+                        Color(0xFFF0F0F0),
                       ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,

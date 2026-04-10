@@ -4,7 +4,6 @@ import 'package:just_audio/just_audio.dart';
 import 'glass_container.dart';
 import 'services/music_service.dart';
 import 'services/audio_player_service.dart';
-import 'utils/lru_cache.dart';
 
 class MusicPlayerScreen extends StatefulWidget {
   final MusicFile music;
@@ -27,8 +26,7 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen>
   late AnimationController _albumArtController;
   late Animation<double> _albumArtScale;
   late Animation<double> _albumArtOpacity;
-  final LruMap<String, ImageProvider> _artworkCache =
-      LruMap<String, ImageProvider>(_artworkCacheEntries);
+  final Map<String, ImageProvider> _artworkCache = {};
   
   MusicFile? _previousMusic;
   double _dragOffset = 0;
@@ -89,10 +87,14 @@ class _MusicPlayerScreenState extends State<MusicPlayerScreen>
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.done &&
             snapshot.data != null) {
+          final key = '${music.id}@player-memory';
           final provider = _artworkCache.putIfAbsent(
-            '${music.id}@player-memory',
+            key,
             () => MemoryImage(snapshot.data!),
           );
+          if (_artworkCache.length > _artworkCacheEntries) {
+            _artworkCache.remove(_artworkCache.keys.first);
+          }
           return Image(
             image: provider,
             fit: BoxFit.cover,

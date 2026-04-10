@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
-import '../glass_container.dart';
 import '../services/gallery_service.dart';
 
 Widget buildGalleryStatsChip({
@@ -30,6 +29,104 @@ Widget buildGalleryStatsChip({
           ),
         ),
       ],
+    ),
+  );
+}
+
+Widget buildPremiumListTileShell({
+  required Widget child,
+  required ColorScheme colorScheme,
+  required bool isDark,
+  required VoidCallback onTap,
+  VoidCallback? onLongPress,
+  bool isSelected = false,
+  double scale = 1.0,
+  EdgeInsetsGeometry padding = const EdgeInsets.all(12),
+  BorderRadius borderRadius = const BorderRadius.all(Radius.circular(26)),
+}) {
+  final topColor = isDark
+      ? const Color(0xFF1C1C1C)
+      : const Color(0xFFFFFFFF);
+  final midColor = isDark
+      ? const Color(0xFF181818)
+      : const Color(0xFFF9F9F9);
+  final bottomColor = isDark
+      ? const Color(0xFF131313)
+      : const Color(0xFFF2F2F2);
+
+  return RepaintBoundary(
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: borderRadius,
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOutCubic,
+          scale: scale,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [topColor, midColor, bottomColor],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: borderRadius,
+              border: Border.all(
+                color: isSelected
+                    ? colorScheme.primary.withValues(
+                        alpha: isDark ? 0.34 : 0.22,
+                      )
+                    : Colors.white.withValues(
+                        alpha: isDark ? 0.12 : 0.24,
+                      ),
+                width: isSelected ? 1.1 : 0.9,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.06),
+                  blurRadius: 16,
+                  offset: const Offset(0, 10),
+                ),
+                if (isSelected)
+                  BoxShadow(
+                    color: colorScheme.primary.withValues(
+                      alpha: isDark ? 0.18 : 0.1,
+                    ),
+                    blurRadius: 22,
+                    offset: const Offset(0, 10),
+                  ),
+              ],
+            ),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: borderRadius,
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.white.withValues(alpha: isDark ? 0.1 : 0.32),
+                          Colors.white.withValues(alpha: 0),
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.center,
+                      ),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: padding,
+                  child: child,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     ),
   );
 }
@@ -63,29 +160,10 @@ Widget buildFeaturedAlbumCard({
                   gradient: LinearGradient(
                     colors: [
                       Colors.transparent,
-                      Colors.black.withOpacity(isDark ? 0.44 : 0.4),
+                      Colors.black.withValues(alpha: isDark ? 0.44 : 0.4),
                     ],
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 14,
-              left: 14,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.28),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: const Text(
-                  'Featured',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
                   ),
                 ),
               ),
@@ -96,7 +174,7 @@ Widget buildFeaturedAlbumCard({
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.56),
+                  color: Colors.black.withValues(alpha: 0.56),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
                     color: Colors.white.withValues(alpha: 0.12),
@@ -122,7 +200,7 @@ Widget buildFeaturedAlbumCard({
                     Text(
                       '${album.count} items',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.8),
+                        color: Colors.white.withValues(alpha: 0.8),
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
                       ),
@@ -144,69 +222,63 @@ Widget buildAlbumListTile({
   required Widget Function(AssetEntity asset, {int thumbPx}) buildImage,
   required VoidCallback onTap,
 }) {
-  return RepaintBoundary(
-    child: GestureDetector(
-      onTap: onTap,
-      child: GlassContainer(
-        borderRadius: BorderRadius.circular(26),
-        enableBlur: true,
-        blurSigma: 8,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
+  return buildPremiumListTileShell(
+    colorScheme: colorScheme,
+    isDark: colorScheme.brightness == Brightness.dark,
+    onTap: onTap,
+    child: Row(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: SizedBox(
+            width: 74,
+            height: 74,
+            child: album.coverAsset != null
+                ? buildImage(album.coverAsset!, thumbPx: 120)
+                : Container(color: colorScheme.surfaceContainerHighest),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: SizedBox(
-                  width: 74,
-                  height: 74,
-                  child: album.coverAsset != null
-                      ? buildImage(album.coverAsset!, thumbPx: 120)
-                      : Container(color: colorScheme.surfaceContainerHigh),
+              Text(
+                album.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: colorScheme.onSurface,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.1,
                 ),
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      album.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: colorScheme.onSurface,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '${album.count} items',
-                      style: TextStyle(
-                        color: colorScheme.onSurface.withOpacity(0.68),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: colorScheme.primaryContainer.withOpacity(0.92),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  Icons.chevron_right_rounded,
-                  color: colorScheme.onPrimaryContainer,
+              const SizedBox(height: 6),
+              Text(
+                '${album.count} items',
+                style: TextStyle(
+                  color: colorScheme.onSurface.withValues(alpha: 0.68),
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ],
           ),
         ),
-      ),
+        Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: colorScheme.primaryContainer.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(
+            Icons.chevron_right_rounded,
+            color: colorScheme.onPrimaryContainer,
+          ),
+        ),
+      ],
     ),
   );
 }

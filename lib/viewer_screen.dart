@@ -939,26 +939,50 @@ class _ViewerScreenState extends State<ViewerScreen> {
 
   Widget buildQuickActionBar(bool isDark) {
     return GlassContainer(
-      borderRadius: BorderRadius.circular(32),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _actionIcon(Icons.share_rounded, isDark, shareAsset),
-            _actionIcon(Icons.edit_rounded, isDark, editAsset),
-            _actionIcon(
-              isFavorite
-                  ? Icons.favorite_rounded
-                  : Icons.favorite_border_rounded,
-              isDark,
-              toggleFavorite,
-              color: isFavorite ? const Color(0xFFE66A74) : null,
+      borderRadius: BorderRadius.circular(38),
+      blurSigma: 24,
+      borderColor: Colors.white.withValues(alpha: isDark ? 0.15 : 0.25),
+      backgroundColor: isDark
+          ? const Color(0xFF161616).withValues(alpha: 0.85)
+          : Colors.white.withValues(alpha: 0.9),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(38),
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.white.withValues(alpha: isDark ? 0.1 : 0.15),
+                    Colors.transparent,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
             ),
-            _actionIcon(Icons.visibility_off_rounded, isDark, hideAsset),
-            _actionIcon(Icons.delete_rounded, isDark, deleteAsset),
-          ],
-        ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _actionIcon(Icons.share_rounded, isDark, shareAsset),
+                _actionIcon(Icons.edit_rounded, isDark, editAsset),
+                _actionIcon(
+                  isFavorite
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  isDark,
+                  toggleFavorite,
+                  color: isFavorite ? const Color(0xFFE66A74) : null,
+                ),
+                _actionIcon(Icons.info_outline_rounded, isDark, () => openDetails()),
+                _actionIcon(Icons.delete_outline_rounded, isDark, deleteAsset),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -970,11 +994,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
     Color? color,
   }) {
     return IconButton(
-      iconSize: 28,
+      iconSize: isDark ? 28 : 26,
       padding: EdgeInsets.zero,
       icon: Icon(
         icon,
-        color: color ?? (isDark ? Colors.white : Colors.black87),
+        color: color ?? (isDark ? Colors.white : const Color(0xFF333333)),
       ),
       onPressed: onTap,
     );

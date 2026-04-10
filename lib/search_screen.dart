@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -9,7 +8,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'gallery/gallery_grid_widgets.dart' as grid_widgets;
 import 'glass_container.dart';
 import 'services/gallery_service.dart';
-import 'utils/lru_cache.dart';
 import 'video_viewer_screen.dart';
 import 'viewer_screen.dart';
 
@@ -29,8 +27,7 @@ class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
   final ScrollController _resultsScrollController = ScrollController();
-  final LruMap<String, AssetEntityImageProvider> _thumbnailProviders =
-      LruMap<String, AssetEntityImageProvider>(_maxThumbCacheEntries);
+  final Map<String, AssetEntityImageProvider> _thumbnailProviders = {};
 
   final List<AssetEntity> _loadedAssets = [];
   List<AssetEntity> _filteredAssets = [];
@@ -275,6 +272,9 @@ class _SearchScreenState extends State<SearchScreen> {
         thumbnailFormat: ThumbnailFormat.jpeg,
       ),
     );
+    if (_thumbnailProviders.length > _maxThumbCacheEntries) {
+      _thumbnailProviders.remove(_thumbnailProviders.keys.first);
+    }
     return provider;
   }
 
@@ -323,14 +323,32 @@ class _SearchScreenState extends State<SearchScreen> {
       body: Stack(
         children: [
           Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: isDark
+                      ? const [
+                          Color(0xFF0A0614),
+                          Color(0xFF160D2A),
+                          Color(0xFF251242),
+                        ]
+                      : const [
+                          Color(0xFFF4ECFF),
+                          Color(0xFFE9DAFF),
+                          Color(0xFFD8C1FF),
+                        ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
             child: GestureDetector(
               onTap: () => Navigator.pop(context),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                child: Container(
-                  color: (isDark ? Colors.black : Colors.white).withOpacity(
-                    isDark ? 0.42 : 0.22,
-                  ),
+              child: Container(
+                color: (isDark ? Colors.black : Colors.white).withOpacity(
+                  isDark ? 0.42 : 0.14,
                 ),
               ),
             ),
@@ -340,7 +358,11 @@ class _SearchScreenState extends State<SearchScreen> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               child: GlassContainer(
                 borderRadius: BorderRadius.circular(32),
-                blurSigma: 28,
+                enableBlur: false,
+                blurSigma: 0,
+                backgroundColor: isDark
+                    ? const Color(0xFF121212).withValues(alpha: 0.94)
+                    : const Color(0xFFFFFFFF).withValues(alpha: 0.96),
                 child: Column(
                   children: [
                     _buildSearchBar(isDark, colorScheme),
@@ -369,7 +391,7 @@ class _SearchScreenState extends State<SearchScreen> {
           child: Container(
             height: 52,
             decoration: BoxDecoration(
-              color: colorScheme.onSurface.withOpacity(isDark ? 0.06 : 0.04),
+              color: colorScheme.onSurface.withOpacity(isDark ? 0.08 : 0.05),
               borderRadius: BorderRadius.circular(26),
               border: Border.all(
                 color: (isDark ? Colors.white : Colors.black).withOpacity(0.08),
@@ -395,7 +417,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 prefixIcon: IconButton(
                   icon: const Icon(Icons.arrow_back_rounded, size: 22),
                   onPressed: () => Navigator.pop(context),
-                  color: colorScheme.onSurface.withOpacity(0.7),
+                  color: colorScheme.onSurface.withOpacity(0.72),
                 ),
                 suffixIcon: _currentQuery.isNotEmpty
                     ? IconButton(
@@ -404,7 +426,7 @@ class _SearchScreenState extends State<SearchScreen> {
                           _searchController.clear();
                           _applyQuery('', scanUntilEnough: false);
                         },
-                        color: colorScheme.onSurface.withOpacity(0.7),
+                        color: colorScheme.onSurface.withOpacity(0.72),
                       )
                     : Icon(
                         Icons.search_rounded,
@@ -422,6 +444,7 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   Widget _buildSuggestions(ColorScheme colorScheme) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
       physics: const BouncingScrollPhysics(),
@@ -478,7 +501,7 @@ class _SearchScreenState extends State<SearchScreen> {
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(
-            children: _quickFilters.map((filter) {
+        children: _quickFilters.map((filter) {
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 child: ActionChip(
@@ -489,8 +512,9 @@ class _SearchScreenState extends State<SearchScreen> {
                   ),
                   label: Text(filter['label'] as String),
                   onPressed: () => _applyFilter(filter['label'] as String),
-                  backgroundColor: colorScheme.surface.withOpacity(0.3),
-                  side: BorderSide(color: Colors.white.withOpacity(0.12)),
+                  backgroundColor:
+                      colorScheme.surface.withOpacity(isDark ? 0.28 : 0.44),
+                  side: BorderSide(color: Colors.white.withOpacity(0.1)),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(20),
                   ),

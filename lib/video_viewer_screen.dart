@@ -582,111 +582,73 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
   }
 
   Widget buildQuickActionBar(bool isDark) {
-    final speed = _currentVideoController?.value.playbackSpeed ?? 1.0;
     return GlassContainer(
-      borderRadius: BorderRadius.circular(28),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _buildBottomActionItem(
-              isDark: isDark,
-              icon: hideViewerChrome
-                  ? Icons.fullscreen_exit_rounded
-                  : Icons.fullscreen_rounded,
-              label: 'Screen',
-              onTap: _toggleImmersivePlayback,
+      borderRadius: BorderRadius.circular(38),
+      blurSigma: 24,
+      borderColor: Colors.white.withValues(alpha: isDark ? 0.15 : 0.25),
+      backgroundColor: isDark
+          ? const Color(0xFF161616).withValues(alpha: 0.85)
+          : Colors.white.withValues(alpha: 0.9),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(38),
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.white.withValues(alpha: isDark ? 0.1 : 0.15),
+                    Colors.transparent,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
             ),
-            _buildBottomActionItem(
-              isDark: isDark,
-              icon: Icons.speed_rounded,
-              label:
-                  '${speed.toStringAsFixed(speed.truncateToDouble() == speed ? 0 : 2)}x',
-              onTap: () => _showPlaybackSpeedSheet(isDark),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _actionIcon(Icons.share_rounded, isDark, shareAsset),
+                _actionIcon(Icons.edit_rounded, isDark, () {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Video Editor Coming Soon'), behavior: SnackBarBehavior.floating));
+                }),
+                _actionIcon(
+                  isFavorite
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  isDark,
+                  toggleFavorite,
+                  color: isFavorite ? const Color(0xFFE66A74) : null,
+                ),
+                _actionIcon(Icons.info_outline_rounded, isDark, () {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Video Info Coming Soon'), behavior: SnackBarBehavior.floating));
+                }),
+                _actionIcon(Icons.delete_outline_rounded, isDark, deleteAsset),
+              ],
             ),
-            _buildBottomActionItem(
-              isDark: isDark,
-              icon: Icons.share_rounded,
-              label: 'Share',
-              onTap: shareAsset,
-            ),
-            _buildBottomActionItem(
-              isDark: isDark,
-              icon: Icons.visibility_off_rounded,
-              label: 'Vault',
-              onTap: hideAsset,
-            ),
-            _buildBottomActionItem(
-              isDark: isDark,
-              icon: Icons.delete_rounded,
-              label: 'Delete',
-              destructive: true,
-              onTap: deleteAsset,
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildBottomActionItem({
-    required bool isDark,
-    required IconData icon,
-    required String label,
-    required FutureOr<void> Function() onTap,
-    bool destructive = false,
+  Widget _actionIcon(
+    IconData icon,
+    bool isDark,
+    VoidCallback onTap, {
+    Color? color,
   }) {
-    final color = destructive
-        ? const Color(0xFFE66A74)
-        : (isDark ? Colors.white : const Color(0xFF211A33));
-
-    return Expanded(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: () async {
-            HapticFeedback.selectionClick();
-            await onTap();
-            if (mounted) {
-              setState(() {});
-            }
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: destructive
-                        ? const Color(0xFFE66A74).withValues(alpha: 0.14)
-                        : (isDark
-                              ? Colors.white.withValues(alpha: 0.08)
-                              : Colors.white.withValues(alpha: 0.42)),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(icon, color: color, size: 22),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+    return IconButton(
+      iconSize: isDark ? 28 : 26,
+      padding: EdgeInsets.zero,
+      icon: Icon(
+        icon,
+        color: color ?? (isDark ? Colors.white : const Color(0xFF333333)),
       ),
+      onPressed: onTap,
     );
   }
 

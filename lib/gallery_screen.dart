@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:path/path.dart' as path;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import 'gallery/gallery_grid_widgets.dart' as gallery_grid_widgets;
 import 'gallery/gallery_section.dart';
 import 'gallery/gallery_section_builder.dart';
 import 'gallery/albums_view.dart';
+import 'gallery/gallery_album_widgets.dart' as gallery_album_widgets;
 import 'glass_container.dart';
 import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
@@ -27,15 +29,18 @@ import 'services/audio_player_service.dart';
 import 'mini_music_player.dart';
 import 'music_player_screen.dart';
 import 'search_screen.dart';
+import 'settings_screen.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'providers/settings_provider.dart';
 
-class GalleryScreen extends StatefulWidget {
+class GalleryScreen extends ConsumerStatefulWidget {
   const GalleryScreen({super.key});
 
   @override
-  State<GalleryScreen> createState() => _GalleryScreenState();
+  ConsumerState<GalleryScreen> createState() => _GalleryScreenState();
 }
 
-class _GalleryScreenState extends State<GalleryScreen>
+class _GalleryScreenState extends ConsumerState<GalleryScreen>
     with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GalleryService service = GalleryService();
@@ -120,6 +125,9 @@ class _GalleryScreenState extends State<GalleryScreen>
   int _lastWarmedEnd = -1;
   bool _isVaultEntryPressing = false;
   bool _isOpeningVault = false;
+  bool _hideTopChrome = false;
+  double _lastScrollOffset = 0;
+  final double _scrollThreshold = 20;
   final Set<AssetEntity> _pendingAssets = {};
   DateTime? _lastBackgroundedAt;
   bool _shouldRefreshOnResume = false;
@@ -476,9 +484,9 @@ class _GalleryScreenState extends State<GalleryScreen>
   ScrollController? get _activeDragSelectionScrollController {
     if (selectedIndex == 0) return scrollController;
     if (selectedIndex == 1) return videosScrollController;
-    if (selectedIndex == 4) return favoritesScrollController;
+    if (selectedIndex == 2) return favoritesScrollController;
     if (selectedIndex == 3) return albumsScrollController;
-    if (selectedIndex == 5) return recycleBinScrollController;
+    if (selectedIndex == 4) return recycleBinScrollController;
     return null;
   }
 
@@ -509,12 +517,10 @@ class _GalleryScreenState extends State<GalleryScreen>
     switch (selectedIndex) {
       case 1: // Videos
         return videos;
-      case 4: // Favorites
+      case 2: // Favorites
         return favoriteImages;
-      case 5: // Recycle Bin
+      case 4: // Recycle Bin
         return recycleBinItems;
-      case 2: // Songs
-        return MusicService().musicCache.map((m) => m.asset).whereType<AssetEntity>().toList();
       case 0:
       default:
         return images;
@@ -1108,11 +1114,9 @@ class _GalleryScreenState extends State<GalleryScreen>
       switch (selectedIndex) {
         case 1: // Videos
           return videos;
-        case 2: // Music
-          return MusicService().musicCache.map((m) => m.asset).whereType<AssetEntity>().toList();
-        case 4: // Favorites
+        case 2: // Favorites
           return favoriteImages;
-        case 5: // Recycle Bin
+        case 4: // Recycle Bin
           return recycleBinItems;
         case 0: // Gallery
         default:
@@ -1197,7 +1201,7 @@ class _GalleryScreenState extends State<GalleryScreen>
                             await shareSelection();
                           },
                         ),
-                        if (selectedIndex == 4)
+                        if (selectedIndex == 2)
                           _buildMenuTile(
                             Icons.favorite_outline_rounded,
                             'Unfavorite items',
@@ -1207,7 +1211,7 @@ class _GalleryScreenState extends State<GalleryScreen>
                               await unfavoriteSelection();
                             },
                           ),
-                        if (selectedIndex == 4)
+                        if (selectedIndex == 2)
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             child: Divider(
@@ -1268,6 +1272,18 @@ class _GalleryScreenState extends State<GalleryScreen>
           ],
         );
       },
+    );
+  }
+
+  void _openMusicScreen() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MusicScreen(
+          audioPlayerService: audioPlayerService,
+          onSelectionToggle: (asset) {},
+        ),
+      ),
     );
   }
 
@@ -1504,181 +1520,142 @@ class _GalleryScreenState extends State<GalleryScreen>
                       }
                       return true;
                     },
-                    child: Material(
-                      color: Colors.transparent,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onLongPress: () {
+                    child: gallery_album_widgets.buildPremiumListTileShell(
+                      colorScheme: colorScheme,
+                      isDark: Theme.of(context).brightness == Brightness.dark,
+                      isSelected: isSelected,
+                      onLongPress: () {
+                        toggleSelection(asset);
+                      },
+                      onTap: () async {
+                        if (isSelectionMode) {
                           toggleSelection(asset);
-                        },
-                        onTap: () async {
-                          if (isSelectionMode) {
-                            toggleSelection(asset);
-                            return;
-                          }
-                          await _showRecycleBinItemSheet(asset);
-                        },
-                        child: GlassContainer(
-                          borderRadius: BorderRadius.circular(26),
-                          enableBlur: false,
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 160),
-                                  curve: Curves.easeOutCubic,
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(26),
-                                    border: Border.all(
-                                      color: isSelected
-                                          ? colorScheme.primary.withValues(
-                                              alpha: 0.42,
-                                            )
-                                          : Colors.transparent,
-                                      width: 1.2,
+                          return;
+                        }
+                        await _showRecycleBinItemSheet(asset);
+                      },
+                      child: Row(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(20),
+                            child: SizedBox(
+                              width: 74,
+                              height: 74,
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  asset.type == AssetType.audio
+                                      ? Container(
+                                          color: colorScheme.primary
+                                              .withValues(alpha: 0.12),
+                                          child: Icon(
+                                            Icons.music_note_rounded,
+                                            color: colorScheme.primary,
+                                            size: 32,
+                                          ),
+                                        )
+                                      : buildImage(asset, thumbPx: 128),
+                                  if (asset.type == AssetType.video)
+                                    Align(
+                                      alignment: Alignment.bottomRight,
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(6),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 5,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.black.withValues(
+                                              alpha: 0.56,
+                                            ),
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            _formatDuration(
+                                              asset.videoDuration,
+                                            ),
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(20),
-                                        child: SizedBox(
-                                          width: 74,
-                                          height: 74,
-                                          child: Stack(
-                                            fit: StackFit.expand,
-                                            children: [
-                                              asset.type == AssetType.audio
-                                                  ? Container(
-                                                      color: colorScheme.primary
-                                                          .withValues(alpha: 0.12),
-                                                      child: Icon(
-                                                        Icons.music_note_rounded,
-                                                        color: colorScheme.primary,
-                                                        size: 32,
-                                                      ),
-                                                    )
-                                                  : buildImage(asset, thumbPx: 128),
-                                              if (asset.type == AssetType.video)
-                                                Align(
-                                                  alignment:
-                                                      Alignment.bottomRight,
-                                                  child: Padding(
-                                                    padding:
-                                                        const EdgeInsets.all(6),
-                                                    child: Container(
-                                                      padding:
-                                                          const EdgeInsets.symmetric(
-                                                            horizontal: 5,
-                                                            vertical: 2,
-                                                          ),
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.black
-                                                            .withValues(
-                                                              alpha: 0.56,
-                                                            ),
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                              8,
-                                                            ),
-                                                      ),
-                                                      child: Text(
-                                                        _formatDuration(
-                                                          asset.videoDuration,
-                                                        ),
-                                                        style: const TextStyle(
-                                                          color: Colors.white,
-                                                          fontSize: 10,
-                                                          fontWeight:
-                                                              FontWeight.w700,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 14),
-                                      Expanded(
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              title,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                color: colorScheme.onSurface,
-                                                fontSize: 17,
-                                                fontWeight: FontWeight.w800,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 6),
-                                            Text(
-                                              subtitle,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                color: colorScheme.onSurface
-                                                    .withValues(alpha: 0.68),
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              asset.type == AssetType.video
-                                                  ? 'Video • Swipe left to restore'
-                                                  : asset.type == AssetType.audio
-                                                      ? 'Music • Swipe left to restore'
-                                                      : 'Photo • Swipe left to restore',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                color: colorScheme.onSurface
-                                                    .withValues(alpha: 0.56),
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Container(
-                                        width: 42,
-                                        height: 42,
-                                        decoration: BoxDecoration(
-                                          color: isSelected
-                                              ? colorScheme.primaryContainer
-                                                    .withValues(alpha: 0.98)
-                                              : colorScheme.primaryContainer
-                                                    .withValues(alpha: 0.92),
-                                          borderRadius: BorderRadius.circular(
-                                            14,
-                                          ),
-                                        ),
-                                        child: Icon(
-                                          isSelected
-                                              ? Icons.check_rounded
-                                              : Icons.chevron_right_rounded,
-                                          color: isSelected
-                                              ? colorScheme.onPrimaryContainer
-                                              : colorScheme.onPrimaryContainer,
-                                        ),
-                                      ),
-                                    ],
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: colorScheme.onSurface,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: -0.1,
                                   ),
                                 ),
-                              ),
-                            ],
+                                const SizedBox(height: 6),
+                                Text(
+                                  subtitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: colorScheme.onSurface
+                                        .withValues(alpha: 0.68),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  asset.type == AssetType.video
+                                      ? 'Video • Swipe left to restore'
+                                      : asset.type == AssetType.audio
+                                          ? 'Music • Swipe left to restore'
+                                          : 'Photo • Swipe left to restore',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: colorScheme.onSurface
+                                        .withValues(alpha: 0.56),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 10),
+                          Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? colorScheme.primaryContainer
+                                      .withValues(alpha: 0.98)
+                                  : colorScheme.primaryContainer
+                                      .withValues(alpha: 0.92),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Icon(
+                              isSelected
+                                  ? Icons.check_rounded
+                                  : Icons.chevron_right_rounded,
+                              color: colorScheme.onPrimaryContainer,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -1831,7 +1808,7 @@ class _GalleryScreenState extends State<GalleryScreen>
       if (wasFavorite) {
         favorites.remove(assetId);
         animating.remove(assetId);
-        favoriteImages.removeWhere((item) => item.id == assetId);
+        favoriteImages = favoriteImages.where((item) => item.id != assetId).toList();
       } else {
         favorites.add(assetId);
         animating.add(assetId);
@@ -2153,26 +2130,54 @@ class _GalleryScreenState extends State<GalleryScreen>
   void onScroll() {
     if (_isViewerTransitioning) return;
 
+    ScrollController? activeController;
+    if (selectedIndex == 0) activeController = scrollController;
+    else if (selectedIndex == 1) activeController = videosScrollController;
+    else if (selectedIndex == 2) activeController = favoritesScrollController;
+    else if (selectedIndex == 3) activeController = albumsScrollController;
+    else if (selectedIndex == 4) activeController = recycleBinScrollController;
+
+    if (activeController == null || !activeController.hasClients) return;
+
+    final offset = activeController.offset;
+    final delta = offset - _lastScrollOffset;
+    _lastScrollOffset = offset;
+
+    bool shouldHide;
+    if (offset < _scrollThreshold) {
+      shouldHide = false;
+    } else if (delta > 2) {
+      // Scrolling down
+      shouldHide = true;
+    } else if (delta < -2) {
+      // Scrolling up
+      shouldHide = false;
+    } else {
+      shouldHide = _hideTopChrome;
+    }
+
+    if (shouldHide != _hideTopChrome) {
+      setState(() {
+        _hideTopChrome = shouldHide;
+      });
+    }
+
     if (selectedIndex == 0) {
-      if (!scrollController.hasClients || isLoading || isLoadingMore) return;
-      final position = scrollController.position;
-      if (position.pixels >
-          position.maxScrollExtent - _galleryLoadMoreThreshold) {
+      if (isLoading || isLoadingMore) return;
+      final position = activeController.position;
+      if (position.pixels > position.maxScrollExtent - _galleryLoadMoreThreshold) {
         loadImages(loadMore: true);
       }
     } else if (selectedIndex == 1) {
-      if (!videosScrollController.hasClients ||
-          isLoadingVideos ||
-          isLoadingMoreVideos) {
-        return;
-      }
-      final position = videosScrollController.position;
-      if (position.pixels >
-          position.maxScrollExtent - _galleryLoadMoreThreshold) {
+      if (isLoadingVideos || isLoadingMoreVideos) return;
+      final position = activeController.position;
+      if (position.pixels > position.maxScrollExtent - _galleryLoadMoreThreshold) {
         loadVideos(loadMore: true);
       }
     }
   }
+
+
 
   ImageProvider<Object> _thumbnailProviderFor(AssetEntity asset, int thumbPx) {
     return AssetEntityImageProvider(
@@ -2232,12 +2237,12 @@ class _GalleryScreenState extends State<GalleryScreen>
     if (selectedIndex == 1) {
       activeController = videosScrollController;
       activeImages = videos;
-    } else if (selectedIndex == 4) {
+    } else if (selectedIndex == 2) {
       activeController = favoritesScrollController;
       activeImages = favoriteImages;
     } else if (selectedIndex == 3) {
       activeController = albumsScrollController;
-    } else if (selectedIndex == 5) {
+    } else if (selectedIndex == 4) {
       activeController = recycleBinScrollController;
       activeImages = recycleBinItems;
     }
@@ -2247,7 +2252,6 @@ class _GalleryScreenState extends State<GalleryScreen>
         activeController.positions.length != 1 ||
         _isViewerTransitioning ||
         activeImages.isEmpty ||
-        selectedIndex == 2 || // Skip music (it uses own ListView)
         selectedIndex == 3) { // Skip albums (it uses different layout)
       return;
     }
@@ -2328,136 +2332,90 @@ class _GalleryScreenState extends State<GalleryScreen>
   }
 
   Widget buildBottomBar(BuildContext context, bool isDark) {
-    final colorScheme = Theme.of(context).colorScheme;
-    // Dark mode: keep the "liquid glass" look but add a consistent dark base
-    // so icons stay readable even over bright/contrasty content behind the blur.
-    final baseScrim = isDark
-        ? Colors.black.withValues(alpha: 0.34)
-        : Colors.transparent;
-    final surfaceTint = isDark
-        ? const Color(0xFF8A76FF).withValues(alpha: 0.16)
-        : colorScheme.primary.withValues(alpha: 0.08);
-    final border = isDark
-        ? Colors.white.withValues(alpha: 0.22)
-        : Colors.white.withValues(alpha: 0.72);
-    final unselectedIcon = isDark
-        ? Colors.white.withValues(alpha: 0.90)
-        : colorScheme.onSurfaceVariant.withValues(alpha: 0.90);
-    final selectedIcon = isDark ? Colors.white : colorScheme.onPrimaryContainer;
-    final indicator = isDark
-        ? colorScheme.primary.withValues(alpha: 0.34)
-        : colorScheme.primaryContainer.withValues(alpha: 0.84);
+    final activeIndex = selectedIndex == 4 ? _primaryTabIndex : selectedIndex;
+    final items = <_BottomNavItemData>[
+      const _BottomNavItemData(
+        icon: Icons.photo_library_outlined,
+        activeIcon: Icons.photo_library_rounded,
+        label: 'Gallery',
+      ),
+      const _BottomNavItemData(
+        icon: Icons.videocam_outlined,
+        activeIcon: Icons.videocam_rounded,
+        label: 'Videos',
+      ),
+      _BottomNavItemData(
+        icon: Icons.favorite_border_rounded,
+        activeIcon: Icons.favorite_rounded,
+        label: 'Favorites',
+        badgeCount: favorites.length,
+      ),
+      const _BottomNavItemData(
+        icon: Icons.folder_copy_outlined,
+        activeIcon: Icons.folder_copy_rounded,
+        label: 'Albums',
+      ),
+    ];
 
     return GlassContainer(
-      borderRadius: BorderRadius.circular(24),
-      blurSigma: 26,
-      borderColor: border,
+      borderRadius: BorderRadius.circular(38),
+      blurSigma: 14,
+      borderColor: Colors.white.withValues(alpha: isDark ? 0.12 : 0.2),
+      backgroundColor: isDark
+          ? const Color(0xFF161616).withValues(alpha: 0.72)
+          : Colors.white.withValues(alpha: 0.8),
       child: Stack(
         children: [
           Positioned.fill(
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(color: baseScrim),
-              ),
-            ),
-          ),
-          Positioned.fill(
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      surfaceTint,
-                      Colors.transparent,
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(38),
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.white.withValues(alpha: isDark ? 0.1 : 0.15),
+                    Colors.transparent,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
               ),
             ),
           ),
-          NavigationBarTheme(
-            data: NavigationBarThemeData(
-              indicatorColor: indicator,
-              indicatorShape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-              ),
-              overlayColor: WidgetStatePropertyAll(
-                Colors.white.withValues(alpha: isDark ? 0.08 : 0.06),
-              ),
-              iconTheme: WidgetStateProperty.resolveWith((states) {
-                if (states.contains(WidgetState.selected)) {
-                  return IconThemeData(color: selectedIcon, size: 28);
-                }
-                return IconThemeData(color: unselectedIcon, size: 26);
-              }),
-            ),
-            child: BadgeTheme(
-              data: BadgeThemeData(
-                backgroundColor: isDark
-                    ? Colors.white.withValues(alpha: 0.16)
-                    : colorScheme.primary.withValues(alpha: 0.14),
-                textColor: isDark
-                    ? Colors.white.withValues(alpha: 0.92)
-                    : colorScheme.onPrimary,
-              ),
-              child: NavigationBar(
-                height: 78,
-                animationDuration: const Duration(milliseconds: 360),
-                selectedIndex: _primaryTabIndex.clamp(0, 4),
-                backgroundColor: Colors.transparent,
-                shadowColor: Colors.transparent,
-                labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
-                onDestinationSelected: (index) {
-                  if (index == _primaryTabIndex && selectedIndex == index) {
-                    return;
-                  }
-                  setState(() {
-                    _primaryTabIndex = index;
-                    selectedIndex = index;
-                    selectedAssetIds.clear();
-                    _gridTileKeys.clear();
-                  });
-                  _notifySelectionChanged();
-                  if (index == 0) {
-                    _scheduleStartupThumbnailWarmup();
-                  } else {
-                    _scheduleThumbnailWarmup();
-                  }
-                },
-                destinations: [
-                  const NavigationDestination(
-                    icon: Icon(Icons.photo_library_outlined),
-                    selectedIcon: Icon(Icons.photo_library),
-                    label: 'Gallery',
-                  ),
-                  const NavigationDestination(
-                    icon: Icon(Icons.videocam_outlined),
-                    selectedIcon: Icon(Icons.videocam),
-                    label: 'Videos',
-                  ),
-                  const NavigationDestination(
-                    icon: Icon(Icons.music_note_outlined),
-                    selectedIcon: Icon(Icons.music_note),
-                    label: 'Music',
-                  ),
-                  const NavigationDestination(
-                    icon: Icon(Icons.folder_copy_outlined),
-                    selectedIcon: Icon(Icons.folder_copy),
-                    label: 'Albums',
-                  ),
-                  NavigationDestination(
-                    icon: Badge.count(
-                      count: favorites.length,
-                      isLabelVisible: favorites.isNotEmpty,
-                      child: const Icon(Icons.favorite_border),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+            child: Row(
+              children: List.generate(items.length, (index) {
+                final item = items[index];
+                final isActive = activeIndex == index;
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: _buildBottomNavItem(
+                      context: context,
+                      item: item,
+                      isActive: isActive,
+                      isDark: isDark,
+                      onTap: () {
+                        if (selectedIndex == index) return;
+                        HapticFeedback.selectionClick();
+                        setState(() {
+                          _primaryTabIndex = index;
+                          selectedIndex = index;
+                          selectedAssetIds.clear();
+                          _gridTileKeys.clear();
+                          _hideTopChrome = false;
+                        });
+                        _notifySelectionChanged();
+                        if (index == 0) {
+                          _scheduleStartupThumbnailWarmup();
+                        } else {
+                          _scheduleThumbnailWarmup();
+                        }
+                      },
                     ),
-                    selectedIcon: const Icon(Icons.favorite),
-                    label: 'Favorites',
                   ),
-                ],
-              ),
+                );
+              }),
             ),
           ),
         ],
@@ -2465,9 +2423,127 @@ class _GalleryScreenState extends State<GalleryScreen>
     );
   }
 
+  Widget _buildBottomNavItem({
+    required BuildContext context,
+    required _BottomNavItemData item,
+    required bool isActive,
+    required bool isDark,
+    required VoidCallback onTap,
+  }) {
+    final activeColor = isDark ? Colors.white : Colors.black;
+    final inactiveColor = isDark ? Colors.white.withValues(alpha: 0.6) : Colors.black54;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(32),
+        onTap: onTap,
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutBack,
+          scale: isActive ? 1.08 : 1.0,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutCubic,
+            height: 62,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: isActive
+                  ? (isDark
+                      ? Colors.white.withValues(alpha: 0.25)
+                      : const Color(0xFFF0F0F0).withValues(alpha: 0.95))
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(32),
+              border: Border.all(
+                color: isActive
+                    ? (isDark ? Colors.white : Colors.black).withValues(alpha: 0.4)
+                    : Colors.transparent,
+                width: 1.5,
+              ),
+              boxShadow: [
+                if (isActive)
+                  BoxShadow(
+                    color: (isDark ? Colors.white : Colors.black)
+                        .withValues(alpha: isDark ? 0.12 : 0.08),
+                    blurRadius: 18,
+                    spreadRadius: 2,
+                  ),
+              ],
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                  if (item.badgeCount != null && item.badgeCount! > 0 && !isActive)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Container(
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                          color: activeColor.withValues(alpha: 0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                        item.badgeCount! > 9 ? '9+' : '${item.badgeCount}',
+                        style: TextStyle(
+                          color: activeColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                ),
+                Icon(
+                  isActive ? item.activeIcon : item.icon,
+                  color: isActive ? activeColor : inactiveColor,
+                  size: isActive ? 30 : 26,
+                ),
+                if (isActive) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      transitionBuilder: (child, animation) =>
+                          FadeTransition(opacity: animation, child: child),
+                      child: Text(
+                        item.label,
+                        key: ValueKey(item.label),
+                        maxLines: 1,
+                        overflow: TextOverflow.clip,
+                        style: TextStyle(
+                          color: isActive
+                              ? (isDark ? activeColor : const Color(0xFF121212))
+                              : inactiveColor,
+                          fontWeight: isActive ? FontWeight.w900 : FontWeight.w800,
+                          fontSize: 14,
+                          letterSpacing: -0.2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openRecycleBin() {
+    setState(() {
+      selectedIndex = 4;
+      selectedAssetIds.clear();
+      _gridTileKeys.clear();
+    });
+    _notifySelectionChanged();
+    _scheduleThumbnailWarmup();
+  }
+
   Widget _buildEndDrawer(BuildContext context) {
-    final themeProvider = context.read<ThemeProvider>();
-    final isDark = themeProvider.isDark(context);
+    final settings = ref.watch(settingsProvider);
+    final isDark = settings.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
 
     return Drawer(
@@ -2489,13 +2565,12 @@ class _GalleryScreenState extends State<GalleryScreen>
             padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
             child: GlassContainer(
               borderRadius: BorderRadius.circular(28),
-              blurSigma: 18,
+              blurSigma: 12,
               backgroundColor: (isDark
-                      ? const Color(0xFF120C24)
-                      : const Color(0xFFF7F2FF))
-                  .withValues(alpha: isDark ? 0.74 : 0.9),
-              borderColor: (isDark ? Colors.white : colorScheme.primary)
-                  .withValues(alpha: isDark ? 0.16 : 0.12),
+                      ? const Color(0xFF121212)
+                      : const Color(0xFFFFFFFF))
+                  .withValues(alpha: isDark ? 0.88 : 0.94),
+              borderColor: Colors.white.withValues(alpha: isDark ? 0.12 : 0.18),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
                 child: Column(
@@ -2522,6 +2597,17 @@ class _GalleryScreenState extends State<GalleryScreen>
                     const SizedBox(height: 10),
                     _drawerTile(
                       context: context,
+                      icon: Icons.music_note_rounded,
+                      title: 'Music',
+                      subtitle: 'Open the lightweight player',
+                      onTap: () {
+                        Navigator.pop(context);
+                        _openMusicScreen();
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    _drawerTile(
+                      context: context,
                       icon: Icons.delete_outline_rounded,
                       title: 'Recycle Bin',
                       subtitle: recycleBinItems.isEmpty
@@ -2529,13 +2615,23 @@ class _GalleryScreenState extends State<GalleryScreen>
                           : '${recycleBinItems.length} items',
                       onTap: () {
                         Navigator.pop(context);
-                        setState(() {
-                          selectedIndex = 5;
-                          selectedAssetIds.clear();
-                          _gridTileKeys.clear();
-                        });
-                        _notifySelectionChanged();
-                        _scheduleThumbnailWarmup();
+                        _openRecycleBin();
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    _drawerTile(
+                      context: context,
+                      icon: Icons.settings_rounded,
+                      title: 'Settings',
+                      subtitle: 'App preferences',
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const SettingsScreen(),
+                          ),
+                        );
                       },
                     ),
                     const SizedBox(height: 10),
@@ -2588,26 +2684,14 @@ class _GalleryScreenState extends State<GalleryScreen>
                           Switch(
                             value: isDark,
                             onChanged: (value) {
-                              final currentlyDark = themeProvider.isDark(context);
-                              if (value == currentlyDark) return;
                               HapticFeedback.selectionClick();
-                              themeProvider.toggleTheme(context);
+                              ref.read(settingsProvider.notifier).toggleThemeContext(context);
                             },
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    _drawerTile(
-                      context: context,
-                      icon: Icons.settings_outlined,
-                      title: 'Settings',
-                      subtitle: 'App preferences',
-                      onTap: () {
-                        Navigator.pop(context);
-                        _showRecycleSnackBar('Settings coming soon');
-                      },
-                    ),
+
                     const Spacer(),
                     Text(
                       'Lightweight • Premium • Fast',
@@ -2647,10 +2731,10 @@ class _GalleryScreenState extends State<GalleryScreen>
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: isDark ? 0.08 : 0.5),
+            color: (isDark ? Colors.white : Colors.black).withValues(alpha: isDark ? 0.06 : 0.04),
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: colorScheme.onSurface.withValues(alpha: 0.08),
+              color: colorScheme.onSurface.withValues(alpha: 0.1),
             ),
           ),
           child: Row(
@@ -2750,7 +2834,7 @@ class _GalleryScreenState extends State<GalleryScreen>
       galleryThumbPx,
     );
     final openingProvider = ViewerScreen.openingImageProvider(context, asset);
-    final isRecycleBinTab = selectedIndex == 5;
+    final isRecycleBinTab = selectedIndex == 4;
     // Use a tab-specific key prefix to avoid Duplicate GlobalKey error during transitions 
     // or when the same asset appears in multiple tabs (e.g. Gallery and Favorites)
     final keyString = 'tab_${selectedIndex}_${asset.id}';
@@ -2986,6 +3070,10 @@ class _GalleryScreenState extends State<GalleryScreen>
 
     return Listener(
       onPointerDown: (_) {
+        if (_dragAutoScrollTimer != null) {
+          _dragAutoScrollTimer?.cancel();
+          _dragAutoScrollTimer = null;
+        }
         final wasPinching = _isPinching;
         _activePointers++;
         if (!wasPinching && _isPinching) {
@@ -3104,15 +3192,11 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
     if (selectedIndex == 2) {
       return KeyedSubtree(
-        key: const ValueKey('tab-music-view'),
-        child: MusicScreen(
-          audioPlayerService: audioPlayerService,
-          selectedIds: selectedAssetIds,
-          onSelectionToggle: toggleSelection,
-        ),
+        key: const ValueKey('tab-favorites-view'),
+        child: buildGridView(visibleImages, colorScheme, favoritesScrollController),
       );
     }
-    if (selectedIndex == 5) {
+    if (selectedIndex == 4) {
       if (isLoadingRecycleBin) {
         return const KeyedSubtree(
           key: ValueKey('loading-recycle'),
@@ -3141,7 +3225,7 @@ class _GalleryScreenState extends State<GalleryScreen>
     }
     if ((selectedIndex == 0 && isLoading) ||
         (selectedIndex == 1 && isLoadingVideos) ||
-        (selectedIndex == 4 && isLoadingFavoriteImages)) {
+        (selectedIndex == 2 && isLoadingFavoriteImages)) {
       return const KeyedSubtree(
         key: ValueKey('loading'),
         child: Center(child: CircularProgressIndicator()),
@@ -3207,7 +3291,7 @@ class _GalleryScreenState extends State<GalleryScreen>
       String emptyText = 'No images found';
       if (selectedIndex == 1) {
         emptyText = 'No videos found';
-      } else if (selectedIndex == 4) {
+      } else if (selectedIndex == 2) {
         emptyText = 'No favorite items yet';
       }
 
@@ -3229,11 +3313,11 @@ class _GalleryScreenState extends State<GalleryScreen>
     ScrollController currentController = scrollController;
     if (selectedIndex == 1) {
       currentController = videosScrollController;
-    } else if (selectedIndex == 4) {
+    } else if (selectedIndex == 2) {
       currentController = favoritesScrollController;
     } else if (selectedIndex == 3) {
       currentController = albumsScrollController;
-    } else if (selectedIndex == 5) {
+    } else if (selectedIndex == 4) {
       currentController = recycleBinScrollController;
     }
 
@@ -3245,20 +3329,20 @@ class _GalleryScreenState extends State<GalleryScreen>
 
   @override
   Widget build(BuildContext context) {
-    final themeProvider = context.watch<ThemeProvider>();
-    final isDark = themeProvider.isDark(context);
+    final settings = ref.watch(settingsProvider);
+    final isDark = settings.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
     final topBarColor = isDark
-        ? const Color(0xFF120C24)
+        ? const Color(0xFF080808).withValues(alpha: 0.85)
         : const Color(0xFFF1E8FF);
-    final titles = ['Gallery', 'Videos', 'Music', 'Albums', 'Favorites', 'Recycle Bin'];
+    final titles = ['Gallery', 'Videos', 'Favorites', 'Albums', 'Recycle Bin'];
 
     List<AssetEntity> visibleImages = images;
     if (selectedIndex == 1) {
       visibleImages = videos;
-    } else if (selectedIndex == 4) {
+    } else if (selectedIndex == 2) {
       visibleImages = favoriteImages;
-    } else if (selectedIndex == 5) {
+    } else if (selectedIndex == 4) {
       visibleImages = recycleBinItems;
     }
 
@@ -3275,6 +3359,7 @@ class _GalleryScreenState extends State<GalleryScreen>
       valueListenable: _selectionCount,
       builder: (context, count, _) {
         final isSelectionMode = count > 0;
+        final showTopChrome = isSelectionMode || !_hideTopChrome;
 
         return PopScope(
           canPop: !isSelectionMode && selectedIndex == 0,
@@ -3290,6 +3375,7 @@ class _GalleryScreenState extends State<GalleryScreen>
                 _primaryTabIndex = 0;
                 selectedAssetIds.clear();
                 _gridTileKeys.clear();
+                _hideTopChrome = false;
               });
               _notifySelectionChanged();
               _scheduleStartupThumbnailWarmup();
@@ -3305,162 +3391,201 @@ class _GalleryScreenState extends State<GalleryScreen>
                 HapticFeedback.selectionClick();
               }
             },
-            appBar: PreferredSize(
-              preferredSize: const Size.fromHeight(kToolbarHeight),
-              child: AppBar(
-              leading: isSelectionMode
-                  ? IconButton(
-                      tooltip: 'Close selection',
-                      icon: const Icon(Icons.close_rounded),
-                      onPressed: clearSelection,
-                    )
-                  : null,
-              title: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 360),
-                transitionBuilder: (child, animation) {
-                  return FadeTransition(
-                    opacity: animation,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 0.15),
-                        end: Offset.zero,
-                      ).animate(animation),
-                      child: child,
-                    ),
-                  );
-                },
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTapDown: isSelectionMode || selectedIndex != 0
-                      ? null
-                      : (_) => _startVaultEntryPress(),
-                  onTapUp: isSelectionMode || selectedIndex != 0
-                      ? null
-                      : (_) => _cancelVaultEntryPress(),
-                  onTapCancel: isSelectionMode || selectedIndex != 0
-                      ? null
-                      : _cancelVaultEntryPress,
-                  child: AnimatedScale(
-                    scale: _isVaultEntryPressing ? 0.96 : 1,
-                    duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeOutCubic,
-                    child: Text(
-                      isSelectionMode
-                          ? '$count selected'
-                          : titles[selectedIndex],
-                      key: ValueKey('${selectedIndex}_$count'),
-                    ),
-                  ),
-                ),
-              ),
-              backgroundColor: topBarColor,
-              surfaceTintColor: Colors.transparent,
-              systemOverlayStyle: overlayStyle.copyWith(
-                statusBarColor: Colors.transparent,
-                systemNavigationBarColor: Colors.transparent,
-                systemNavigationBarDividerColor: Colors.transparent,
-                systemNavigationBarContrastEnforced: false,
-              ),
-              actions: [
-                if (isSelectionMode) ...[
-                  if (selectedIndex == 4)
-                    IconButton(
-                      tooltip: 'Unfavorite',
-                      icon: const Icon(Icons.favorite_rounded),
-                      onPressed: unfavoriteSelection,
-                    ),
-                  if (selectedIndex != 4 && selectedIndex != 5) ...[
-                    IconButton(
-                      tooltip: 'Favorite',
-                      icon: const Icon(Icons.favorite_border_rounded),
-                      onPressed: favoriteSelection,
-                    ),
-                    IconButton(
-                      tooltip: 'Move to Safe Folder',
-                      icon: const Icon(Icons.lock_outline_rounded),
-                      onPressed: moveSelectionToVault,
-                    ),
-                    IconButton(
-                      tooltip: 'Move to Recycle Bin',
-                      icon: const Icon(Icons.delete_outline_rounded),
-                      onPressed: moveSelectionToRecycleBin,
-                    ),
-                  ],
-                  if (selectedIndex == 5) ...[
-                    IconButton(
-                      tooltip: 'Restore',
-                      icon: const Icon(Icons.restore_rounded),
-                      onPressed: isRecycleActionInProgress
-                          ? null
-                          : restoreSelectionFromRecycleBin,
-                    ),
-                    IconButton(
-                      tooltip: 'Delete forever',
-                      icon: const Icon(Icons.delete_forever_rounded),
-                      onPressed: isRecycleActionInProgress
-                          ? null
-                          : deleteSelectionForever,
-                    ),
-                  ],
-                  IconButton(
-                    tooltip: 'Actions',
-                    icon: const Icon(Icons.more_vert_rounded),
-                    onPressed: _showSelectionMenu,
-                  ),
-                ],
-                if (!isSelectionMode) ...[
-                  if (selectedIndex == 5)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 14),
-                      child: Center(
-                        child: Text(
-                          'Tap for actions • Swipe restore/delete',
-                          style: TextStyle(
-                            color: colorScheme.onSurface.withValues(alpha: 0.7),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
+            appBar: showTopChrome
+                ? PreferredSize(
+                    preferredSize: const Size.fromHeight(kToolbarHeight),
+                    child: AppBar(
+                      leading: isSelectionMode
+                          ? IconButton(
+                              tooltip: 'Close selection',
+                              icon: const Icon(Icons.close_rounded),
+                              onPressed: clearSelection,
+                            )
+                          : (selectedIndex != 0 
+                              ? IconButton(
+                                  icon: const Icon(Icons.arrow_back_rounded),
+                                  onPressed: () {
+                                    setState(() {
+                                      selectedIndex = 0;
+                                      _primaryTabIndex = 0;
+                                    });
+                                  },
+                                )
+                              : null),
+                      title: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 360),
+                        transitionBuilder: (child, animation) {
+                          return FadeTransition(
+                            opacity: animation,
+                            child: SlideTransition(
+                              position: Tween<Offset>(
+                                begin: const Offset(0, 0.15),
+                                end: Offset.zero,
+                              ).animate(animation),
+                              child: child,
+                            ),
+                          );
+                        },
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onTapDown: isSelectionMode || selectedIndex != 0
+                              ? null
+                              : (_) => _startVaultEntryPress(),
+                          onTapUp: isSelectionMode || selectedIndex != 0
+                              ? null
+                              : (_) => _cancelVaultEntryPress(),
+                          onTapCancel: isSelectionMode || selectedIndex != 0
+                              ? null
+                              : _cancelVaultEntryPress,
+                          child: AnimatedScale(
+                            scale: _isVaultEntryPressing ? 0.96 : 1,
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOutCubic,
+                            child: Text(
+                              isSelectionMode
+                                  ? '$count selected'
+                                  : titles[selectedIndex],
+                              key: ValueKey('${selectedIndex}_$count'),
+                            ),
                           ),
                         ),
                       ),
+                      backgroundColor: Colors.transparent,
+                      surfaceTintColor: Colors.transparent,
+                      flexibleSpace: ClipRect(
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: topBarColor.withValues(alpha: isDark ? 0.75 : 0.82),
+                              border: Border(
+                                bottom: BorderSide(
+                                  color: (isDark ? Colors.white : Colors.black)
+                                      .withValues(alpha: isDark ? 0.1 : 0.06),
+                                  width: 1.0,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      systemOverlayStyle: overlayStyle.copyWith(
+                        statusBarColor: Colors.transparent,
+                        systemNavigationBarColor: Colors.transparent,
+                        systemNavigationBarDividerColor: Colors.transparent,
+                        systemNavigationBarContrastEnforced: false,
+                      ),
+                      actions: [
+                        if (isSelectionMode) ...[
+                          if (selectedIndex == 2)
+                            IconButton(
+                              tooltip: 'Unfavorite',
+                              icon: const Icon(Icons.favorite_rounded),
+                              onPressed: unfavoriteSelection,
+                            ),
+                          if (selectedIndex != 2 && selectedIndex != 4) ...[
+                            IconButton(
+                              tooltip: 'Favorite',
+                              icon: const Icon(Icons.favorite_border_rounded),
+                              onPressed: favoriteSelection,
+                            ),
+                            IconButton(
+                              tooltip: 'Move to Safe Folder',
+                              icon: const Icon(Icons.lock_outline_rounded),
+                              onPressed: moveSelectionToVault,
+                            ),
+                            IconButton(
+                              tooltip: 'Move to Recycle Bin',
+                              icon: const Icon(Icons.delete_outline_rounded),
+                              onPressed: moveSelectionToRecycleBin,
+                            ),
+                          ],
+                          if (selectedIndex == 4) ...[
+                            IconButton(
+                              tooltip: 'Restore',
+                              icon: const Icon(Icons.restore_rounded),
+                              onPressed: isRecycleActionInProgress
+                                  ? null
+                                  : restoreSelectionFromRecycleBin,
+                            ),
+                            IconButton(
+                              tooltip: 'Delete forever',
+                              icon: const Icon(Icons.delete_forever_rounded),
+                              onPressed: isRecycleActionInProgress
+                                  ? null
+                                  : deleteSelectionForever,
+                            ),
+                          ],
+                          IconButton(
+                            tooltip: 'Actions',
+                            icon: const Icon(Icons.more_vert_rounded),
+                            onPressed: _showSelectionMenu,
+                          ),
+                        ],
+                        if (!isSelectionMode) ...[
+                          if (selectedIndex == 4)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 14),
+                              child: Center(
+                                child: Text(
+                                  'Tap for actions • Swipe restore/delete',
+                                  style: TextStyle(
+                                    color: colorScheme.onSurface.withValues(alpha: 0.7),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          Hero(
+                            tag: 'search_icon',
+                            child: IconButton(
+                              tooltip: 'Search',
+                              icon: const Icon(Icons.search_rounded),
+                              onPressed: () => _openSearch(context),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Menu',
+                            icon: const Icon(Icons.menu_rounded),
+                            onPressed: () {
+                              if (_scaffoldKey.currentState?.isEndDrawerOpen == true) {
+                                Navigator.pop(context);
+                                return;
+                              }
+                              _scaffoldKey.currentState?.openEndDrawer();
+                            },
+                          ),
+                        ],
+                      ],
                     ),
-                  Hero(
-                    tag: 'search_icon',
-                    child: IconButton(
-                      tooltip: 'Search',
-                      icon: const Icon(Icons.search_rounded),
-                      onPressed: () => _openSearch(context),
-                    ),
+                  )
+                : const PreferredSize(
+                    preferredSize: Size.zero,
+                    child: SizedBox.shrink(),
                   ),
-                  IconButton(
-                    tooltip: 'Menu',
-                    icon: const Icon(Icons.menu_rounded),
-                    onPressed: () {
-                      if (_scaffoldKey.currentState?.isEndDrawerOpen == true) {
-                        Navigator.pop(context);
-                        return;
-                      }
-                      _scaffoldKey.currentState?.openEndDrawer();
-                    },
-                  ),
-                ],
-              ],
-              ),
-            ),
-            body: Stack(
+            body: Listener(
+              onPointerDown: (_) {
+                if (_dragAutoScrollTimer != null) {
+                  _dragAutoScrollTimer?.cancel();
+                  _dragAutoScrollTimer = null;
+                }
+              },
+              child: Stack(
         children: [
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: isDark
                     ? const [
-                        Color(0xFF120C24),
-                        Color(0xFF1E163A),
-                        Color(0xFF2C1F52),
+                        Color(0xFF050505),
+                        Color(0xFF080808),
+                        Color(0xFF0C0C0C),
                       ]
                     : const [
-                        Color(0xFFF0E5FF),
-                        Color(0xFFE4D3FF),
-                        Color(0xFFD5BDFF),
+                        Color(0xFFFFFFFF),
+                        Color(0xFFF9F9F9),
+                        Color(0xFFF0F0F0),
                       ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -3476,9 +3601,8 @@ class _GalleryScreenState extends State<GalleryScreen>
                 height: 220,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(
-                    0xFFA855F7,
-                  ).withOpacity(isDark ? 0.18 : 0.24),
+                  color: const Color(0xFF8B5CF6)
+                      .withValues(alpha: isDark ? 0.05 : 0.08),
                 ),
               ),
             ),
@@ -3492,9 +3616,8 @@ class _GalleryScreenState extends State<GalleryScreen>
                 height: 200,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(
-                    0xFFDDD6FE,
-                  ).withOpacity(isDark ? 0.08 : 0.4),
+                  color: const Color(0xFFC4B5FD)
+                      .withValues(alpha: isDark ? 0.03 : 0.12),
                 ),
               ),
             ),
@@ -3518,42 +3641,56 @@ class _GalleryScreenState extends State<GalleryScreen>
             child: buildBody(visibleImages, colorScheme, isDark),
           ),
         ],
-            ),
-            bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (audioPlayerService.currentMusic != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: MiniMusicPlayer(
-                  audioPlayerService: audioPlayerService,
-                  onTap: () {
-                    if (audioPlayerService.currentMusic != null) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => MusicPlayerScreen(
-                            music: audioPlayerService.currentMusic!,
-                            audioPlayerService: audioPlayerService,
-                          ),
+      ),
+    ),
+    bottomNavigationBar: SafeArea(
+      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (audioPlayerService.currentMusic != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: MiniMusicPlayer(
+                audioPlayerService: audioPlayerService,
+                onTap: () {
+                  if (audioPlayerService.currentMusic != null) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => MusicPlayerScreen(
+                          music: audioPlayerService.currentMusic!,
+                          audioPlayerService: audioPlayerService,
                         ),
-                      );
-                    }
-                  },
-                ),
+                      ),
+                    );
+                  }
+                },
               ),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: buildBottomBar(context, isDark),
             ),
-          ],
-        ),
-            ),
+          ClipRect(
+            child: buildBottomBar(context, isDark),
           ),
-        );
-      },
-    );
-  }
+        ],
+      ),
+    ),
+  ),
+);
+},
+);
+}
+}
+
+class _BottomNavItemData {
+  final IconData icon;
+  final IconData activeIcon;
+  final String label;
+  final int? badgeCount;
+
+  const _BottomNavItemData({
+    required this.icon,
+    required this.activeIcon,
+    required this.label,
+    this.badgeCount,
+  });
 }

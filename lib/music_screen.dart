@@ -2,14 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'dart:io';
-import 'dart:ui' as ui;
 import 'package:photo_manager/photo_manager.dart';
+import 'gallery/gallery_album_widgets.dart' as gallery_album_widgets;
 import 'glass_container.dart';
 import 'services/music_service.dart';
 import 'services/audio_player_service.dart';
 import 'services/recycle_bin_database.dart';
 import 'music_player_screen.dart';
-import 'utils/lru_cache.dart';
 
 class MusicScreen extends StatefulWidget {
   final AudioPlayerService? audioPlayerService;
@@ -31,8 +30,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   static const int _artworkCacheEntries = 500;
   final MusicService musicService = MusicService();
   late AudioPlayerService audioPlayerService;
-  final LruMap<String, ImageProvider> _artworkCache =
-      LruMap<String, ImageProvider>(_artworkCacheEntries);
+  final Map<String, ImageProvider> _artworkCache = {};
   
   List<MusicFile> allMusics = [];
   List<MusicFile> filteredMusics = [];
@@ -79,10 +77,14 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.done &&
             snapshot.data != null) {
+          final key = '${music.id}@memory';
           final provider = _artworkCache.putIfAbsent(
-            '${music.id}@memory',
+            key,
             () => MemoryImage(snapshot.data!),
           );
+          if (_artworkCache.length > _artworkCacheEntries) {
+            _artworkCache.remove(_artworkCache.keys.first);
+          }
           return Image(
             image: provider,
             fit: BoxFit.cover,
@@ -90,14 +92,18 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
         }
 
         if (music.albumArtPath != null) {
+          final key = '${music.id}@file';
           final provider = _artworkCache.putIfAbsent(
-            '${music.id}@file',
+            key,
             () => ResizeImage(
               FileImage(File(music.albumArtPath!)),
               width: 150,
               height: 150,
             ),
           );
+          if (_artworkCache.length > _artworkCacheEntries) {
+            _artworkCache.remove(_artworkCache.keys.first);
+          }
           return Image(
             image: provider,
             fit: BoxFit.cover,
@@ -216,134 +222,148 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    if (isLoading) {
-      return Center(
-        child: CircularProgressIndicator(
-          color: colorScheme.primary,
-        ),
-      );
-    }
-
-    if (allMusics.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.music_note_outlined,
-              size: 64,
-              color: colorScheme.onSurface.withOpacity(0.6),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No music found',
-              style: TextStyle(
-                color: colorScheme.onSurface.withOpacity(0.8),
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: 250,
-              child: Text(
-                'Try adding songs to your Download, Music, or Documents folder. Then tap refresh to reload.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: colorScheme.onSurface.withOpacity(0.6),
-                  fontSize: 14,
-                  height: 1.4,
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: isDark
+                      ? const [
+                          Color(0xFF050505),
+                          Color(0xFF080808),
+                          Color(0xFF0C0C0C),
+                        ]
+                      : const [
+                          Color(0xFFFFFFFF),
+                          Color(0xFFF9F9F9),
+                          Color(0xFFF0F0F0),
+                        ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
               ),
             ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: () => loadMusics(),
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Refresh'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return CustomScrollView(
-      controller: _scrollController,
-      physics: const BouncingScrollPhysics(),
-      slivers: [
-        // Header
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-            child: RepaintBoundary(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(32),
-                child: isDark
-                    ? Container(
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(32),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.12),
-                          ),
+          ),
+          if (isLoading)
+            Center(
+              child: CircularProgressIndicator(color: colorScheme.primary),
+            )
+          else if (allMusics.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.music_note_outlined,
+                      size: 64,
+                      color: colorScheme.onSurface.withOpacity(0.6),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'No music found',
+                      style: TextStyle(
+                        color: colorScheme.onSurface.withOpacity(0.8),
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Try adding songs to Download, Music, or Documents. Then refresh to reload.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: colorScheme.onSurface.withOpacity(0.6),
+                        fontSize: 14,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    FilledButton.icon(
+                      onPressed: () => loadMusics(refresh: true),
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Refresh'),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            CustomScrollView(
+              controller: _scrollController,
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                SliverAppBar(
+                  pinned: false,
+                  floating: true,
+                  snap: true,
+                  elevation: 0,
+                  scrolledUnderElevation: 0,
+                  surfaceTintColor: Colors.transparent,
+                  backgroundColor: Colors.transparent,
+                  automaticallyImplyLeading: false,
+                  toolbarHeight: 68,
+                  titleSpacing: 16,
+                  title: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Music',
+                        style: TextStyle(
+                          color: colorScheme.onSurface,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w800,
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Music',
-                              style: TextStyle(
-                                color: colorScheme.onSurface,
-                                fontSize: 26,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'Enjoy your collection of songs',
-                              style: TextStyle(
-                                color: colorScheme.onSurface.withOpacity(0.72),
-                                height: 1.35,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children: [
-                                _buildStatsChip(
-                                  icon: Icons.music_note_rounded,
-                                  label: '${allMusics.length} songs',
-                                  color: colorScheme.primaryContainer.withOpacity(0.9),
-                                  textColor: colorScheme.onPrimaryContainer,
-                                ),
-                              ],
-                            ),
-                          ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${allMusics.length} tracks',
+                        style: TextStyle(
+                          color: colorScheme.onSurface.withOpacity(0.62),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
                         ),
-                      )
-                    : BackdropFilter(
-                        filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    IconButton(
+                      tooltip: 'Back',
+                      icon: const Icon(Icons.arrow_back_rounded),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+                    child: RepaintBoundary(
+                      child: GlassContainer(
+                        borderRadius: BorderRadius.circular(32),
+                        enableBlur: false,
+                        blurSigma: 0,
+                        backgroundColor: isDark
+                            ? const Color(0xFF121212).withValues(alpha: 0.94)
+                            : const Color(0xFFFFFFFF).withValues(alpha: 0.96),
+                        borderColor: Colors.white
+                            .withValues(alpha: isDark ? 0.14 : 0.18),
                         child: Container(
                           padding: const EdgeInsets.all(18),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.25),
-                            borderRadius: BorderRadius.circular(32),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.4),
-                              width: 1.5,
-                            ),
-                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Music',
+                                'Library',
                                 style: TextStyle(
                                   color: colorScheme.onSurface,
-                                  fontSize: 26,
-                                  fontWeight: FontWeight.w800,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
                               const SizedBox(height: 6),
@@ -362,7 +382,8 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                                   _buildStatsChip(
                                     icon: Icons.music_note_rounded,
                                     label: '${allMusics.length} songs',
-                                    color: colorScheme.primaryContainer.withOpacity(0.9),
+                                    color: colorScheme.primaryContainer
+                                        .withOpacity(0.88),
                                     textColor: colorScheme.onPrimaryContainer,
                                   ),
                                 ],
@@ -371,78 +392,95 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                           ),
                         ),
                       ),
-              ),
-            ),
-          ),
-        ),
-        // Search bar
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: GlassContainer(
-              borderRadius: BorderRadius.circular(28),
-              child: TextField(
-                onChanged: _searchMusics,
-                decoration: InputDecoration(
-                  hintText: 'Search songs...',
-                  border: InputBorder.none,
-                  prefixIcon: const Icon(Icons.search),
-                  contentPadding:
-                      const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                  hintStyle: TextStyle(
-                    color: colorScheme.onSurface.withOpacity(0.6),
+                    ),
                   ),
                 ),
-              ),
-            ),
-          ),
-        ),
-        // Music list
-        if (filteredMusics.isEmpty)
-          SliverToBoxAdapter(
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Text(
-                  'No results for "$searchQuery"',
-                  style: TextStyle(
-                    color: colorScheme.onSurface.withOpacity(0.6),
-                    fontSize: 14,
-                  ),
-                ),
-              ),
-            ),
-          )
-        else
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  if (index == filteredMusics.length) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 32),
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: colorScheme.primary.withOpacity(0.5),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: GlassContainer(
+                      borderRadius: BorderRadius.circular(28),
+                      enableBlur: false,
+                      blurSigma: 0,
+                      backgroundColor: isDark
+                          ? const Color(0xFF121212).withValues(alpha: 0.92)
+                          : const Color(0xFFFFFFFF).withValues(alpha: 0.94),
+                      child: TextField(
+                        onChanged: _searchMusics,
+                        decoration: InputDecoration(
+                          hintText: 'Search songs...',
+                          border: InputBorder.none,
+                          prefixIcon: const Icon(Icons.search),
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 12,
+                            horizontal: 16,
+                          ),
+                          hintStyle: TextStyle(
+                            color: colorScheme.onSurface.withOpacity(0.6),
+                          ),
                         ),
                       ),
-                    );
-                  }
-                  final music = filteredMusics[index];
-                  return Padding(
-                    padding: EdgeInsets.only(
-                      bottom: index == filteredMusics.length - 1 && !isLoadingMore ? 0 : 8,
                     ),
-                    child: _buildMusicTile(music, index, colorScheme, isDark),
-                  );
-                },
-                childCount: filteredMusics.length + (isLoadingMore ? 1 : 0),
-              ),
+                  ),
+                ),
+                if (filteredMusics.isEmpty)
+                  SliverToBoxAdapter(
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Text(
+                          'No results for "$searchQuery"',
+                          style: TextStyle(
+                            color: colorScheme.onSurface.withOpacity(0.6),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+                    sliver: SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          if (index == filteredMusics.length) {
+                            return Center(
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 32),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: colorScheme.primary.withOpacity(0.5),
+                                ),
+                              ),
+                            );
+                          }
+                          final music = filteredMusics[index];
+                          return Padding(
+                            padding: EdgeInsets.only(
+                              bottom: index == filteredMusics.length - 1 &&
+                                      !isLoadingMore
+                                  ? 0
+                                  : 8,
+                            ),
+                            child: _buildMusicTile(
+                              music,
+                              index,
+                              colorScheme,
+                              isDark,
+                            ),
+                          );
+                        },
+                        childCount:
+                            filteredMusics.length + (isLoadingMore ? 1 : 0),
+                      ),
+                    ),
+                  ),
+              ],
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -465,7 +503,10 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
             final isPlaying = playerSnapshot.data?.playing ?? false;
             final shouldHighlight = isCurrentSong && isPlaying;
 
-            return GestureDetector(
+            return gallery_album_widgets.buildPremiumListTileShell(
+              colorScheme: colorScheme,
+              isDark: isDark,
+              isSelected: isSelected || shouldHighlight,
               onTap: () {
                 if (isSelectionMode) {
                   if (music.asset != null) {
@@ -482,13 +523,6 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                   HapticFeedback.mediumImpact();
                 }
               },
-              child: GlassContainer(
-                borderRadius: BorderRadius.circular(26),
-                enableBlur: false,
-                borderColor: isSelected ? colorScheme.primary.withOpacity(0.5) : Colors.transparent,
-                backgroundColor: isSelected ? colorScheme.primary.withOpacity(0.08) : null,
-                child: Padding(
-              padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
                   ClipRRect(
@@ -513,13 +547,14 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                             color: colorScheme.onSurface,
                             fontSize: 17,
                             fontWeight: FontWeight.w800,
+                            letterSpacing: -0.1,
                           ),
                         ),
                         const SizedBox(height: 6),
                         Text(
                           '${music.formattedDuration} • ${music.formattedSize}',
                           style: TextStyle(
-                            color: colorScheme.onSurface.withOpacity(0.68),
+                            color: colorScheme.onSurface.withValues(alpha: 0.68),
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -537,33 +572,35 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                           audioPlayerService.play();
                         }
                       } else {
-                        audioPlayerService.setPlaylist(filteredMusics, startIndex: index);
+                        audioPlayerService.setPlaylist(
+                          filteredMusics,
+                          startIndex: index,
+                        );
                       }
                     },
                     child: Container(
                       width: 42,
                       height: 42,
                       decoration: BoxDecoration(
-                        color: shouldHighlight 
-                            ? music.themeColor.withOpacity(0.92) 
-                            : colorScheme.primaryContainer.withOpacity(0.92),
+                        color: shouldHighlight
+                            ? music.themeColor.withValues(alpha: 0.94)
+                            : colorScheme.primaryContainer
+                                .withValues(alpha: 0.92),
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Icon(
                         isCurrentSong && isPlaying
                             ? Icons.pause_rounded
                             : Icons.play_arrow_rounded,
-                        color: shouldHighlight 
-                            ? Colors.white 
+                        color: shouldHighlight
+                            ? Colors.white
                             : colorScheme.onPrimaryContainer,
                       ),
                     ),
                   ),
                 ],
               ),
-            ),
-          ),
-        );
+            );
           },
         );
       },

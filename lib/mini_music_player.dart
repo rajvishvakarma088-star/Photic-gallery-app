@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'services/music_service.dart';
 import 'services/audio_player_service.dart';
-import 'utils/lru_cache.dart';
 
 class MiniMusicPlayer extends StatefulWidget {
   final AudioPlayerService audioPlayerService;
@@ -23,8 +22,7 @@ class MiniMusicPlayer extends StatefulWidget {
 
 class _MiniMusicPlayerState extends State<MiniMusicPlayer> {
   static const int _artworkCacheEntries = 80;
-  final LruMap<String, ImageProvider> _artworkCache =
-      LruMap<String, ImageProvider>(_artworkCacheEntries);
+  final Map<String, ImageProvider> _artworkCache = {};
 
   @override
   void dispose() {
@@ -52,32 +50,44 @@ class _MiniMusicPlayerState extends State<MiniMusicPlayer> {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.done &&
             snapshot.data != null) {
+          final key = '${music.id}@mini-memory';
           final provider = _artworkCache.putIfAbsent(
-            '${music.id}@mini-memory',
+            key,
             () => MemoryImage(snapshot.data!),
           );
+          if (_artworkCache.length > _artworkCacheEntries) {
+            _artworkCache.remove(_artworkCache.keys.first);
+          }
           return Image(image: provider, fit: BoxFit.cover);
         }
         if (music.hasAlbumArt) {
           if (music.albumArtBytes != null) {
+            final key = '${music.id}@mini-bytes';
             final provider = _artworkCache.putIfAbsent(
-              '${music.id}@mini-bytes',
+              key,
               () => MemoryImage(music.albumArtBytes!),
             );
+            if (_artworkCache.length > _artworkCacheEntries) {
+              _artworkCache.remove(_artworkCache.keys.first);
+            }
             return Image(
               image: provider,
               fit: BoxFit.cover,
               errorBuilder: (_, __, ___) => fallback,
             );
           } else if (music.albumArtPath != null) {
+            final key = '${music.id}@mini-file';
             final provider = _artworkCache.putIfAbsent(
-              '${music.id}@mini-file',
+              key,
               () => ResizeImage(
                 FileImage(File(music.albumArtPath!)),
                 width: 180,
                 height: 180,
               ),
             );
+            if (_artworkCache.length > _artworkCacheEntries) {
+              _artworkCache.remove(_artworkCache.keys.first);
+            }
             return Image(
               image: provider,
               fit: BoxFit.cover,

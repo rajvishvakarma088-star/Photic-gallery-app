@@ -62,7 +62,11 @@ class AlbumsView extends StatelessWidget {
               child: GlassContainer(
                 padding: const EdgeInsets.all(18),
                 borderRadius: BorderRadius.circular(32),
-                blurSigma: 12,
+                enableBlur: false,
+                blurSigma: 0,
+                backgroundColor: isDark
+                    ? const Color(0xFF1A102D).withValues(alpha: 0.9)
+                    : const Color(0xFFF7F1FF).withValues(alpha: 0.94),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
