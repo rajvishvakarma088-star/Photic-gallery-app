@@ -139,4 +139,9 @@ class RecycleBinDatabase {
       whereArgs: ids,
     );
   }
+
+  Future<void> clearAll() async {
+    final db = await database;
+    await db.delete(_recycleBinTable);
+  }
 }

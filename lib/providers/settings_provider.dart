@@ -17,6 +17,7 @@ class SettingsState {
   final bool smartGrouping;
   final bool duplicateDetection;
   final bool pullToRefreshEnabled;
+  final bool safeFolderEnabled;
 
   const SettingsState({
     this.themeMode = ThemeMode.system,
@@ -33,6 +34,7 @@ class SettingsState {
     this.smartGrouping = false,
     this.duplicateDetection = false,
     this.pullToRefreshEnabled = true,
+    this.safeFolderEnabled = true,
   });
 
   SettingsState copyWith({
@@ -50,6 +52,7 @@ class SettingsState {
     bool? smartGrouping,
     bool? duplicateDetection,
     bool? pullToRefreshEnabled,
+    bool? safeFolderEnabled,
   }) {
     return SettingsState(
       themeMode: themeMode ?? this.themeMode,
@@ -66,6 +69,7 @@ class SettingsState {
       smartGrouping: smartGrouping ?? this.smartGrouping,
       duplicateDetection: duplicateDetection ?? this.duplicateDetection,
       pullToRefreshEnabled: pullToRefreshEnabled ?? this.pullToRefreshEnabled,
+      safeFolderEnabled: safeFolderEnabled ?? this.safeFolderEnabled,
     );
   }
   bool isDark(BuildContext context) {
@@ -107,6 +111,7 @@ class SettingsNotifier extends Notifier<SettingsState> {
   static const _animationsEnabledKey = 'settings_animations_enabled';
   static const _gridSizeKey = 'settings_grid_size';
   static const _pullToRefreshKey = 'settings_pull_to_refresh';
+  static const _safeFolderKey = 'settings_safe_folder_enabled';
 
   SharedPreferences? _prefs;
 
@@ -128,6 +133,7 @@ class SettingsNotifier extends Notifier<SettingsState> {
     final animationsEnabled = _prefs!.getBool(_animationsEnabledKey) ?? true;
     final gridSize = _prefs!.getDouble(_gridSizeKey) ?? 3.0;
     final pullToRefresh = _prefs!.getBool(_pullToRefreshKey) ?? true;
+    final safeFolderEnabled = _prefs!.getBool(_safeFolderKey) ?? true;
 
     state = state.copyWith(
       themeMode: ThemeMode.values[themeModeIndex],
@@ -137,6 +143,7 @@ class SettingsNotifier extends Notifier<SettingsState> {
       animationsEnabled: animationsEnabled,
       gridSize: gridSize,
       pullToRefreshEnabled: pullToRefresh,
+      safeFolderEnabled: safeFolderEnabled,
     );
   }
 
@@ -173,6 +180,11 @@ class SettingsNotifier extends Notifier<SettingsState> {
   void togglePullToRefresh(bool enabled) {
     state = state.copyWith(pullToRefreshEnabled: enabled);
     _prefs?.setBool(_pullToRefreshKey, enabled);
+  }
+
+  void toggleSafeFolder(bool enabled) {
+    state = state.copyWith(safeFolderEnabled: enabled);
+    _prefs?.setBool(_safeFolderKey, enabled);
   }
 
   void toggleAiTagging(bool enabled) {

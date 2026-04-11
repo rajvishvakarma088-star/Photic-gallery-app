@@ -53,16 +53,26 @@ class AlbumsView extends StatelessWidget {
         .where((album) => !album.isFeatured)
         .toList(growable: false);
 
-    return CustomScrollView(
+    return RawScrollbar(
       controller: albumsScrollController,
-      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-      cacheExtent: 1400,
-      slivers: [
-        if (onRefresh != null)
-          PremiumRefreshControl(onRefresh: onRefresh!),
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+      interactive: true,
+      thickness: 6.0,
+      radius: const Radius.circular(8),
+      thumbVisibility: false,
+      thumbColor: colorScheme.onSurface.withValues(alpha: 0.4),
+      child: CustomScrollView(
+        controller: albumsScrollController,
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics(decelerationRate: ScrollDecelerationRate.normal)),
+        cacheExtent: 1400,
+        slivers: [
+          if (onRefresh != null)
+            PremiumRefreshControl(
+              onRefresh: onRefresh!,
+              topPadding: MediaQuery.of(context).padding.top + kToolbarHeight,
+            ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + kToolbarHeight + 10, 16, 8),
             child: RepaintBoundary(
               child: GlassContainer(
                 padding: const EdgeInsets.all(18),
@@ -205,6 +215,7 @@ class AlbumsView extends StatelessWidget {
           ),
         ),
       ],
+     ),
     );
   }
 }

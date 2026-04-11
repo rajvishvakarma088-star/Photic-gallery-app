@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:ui';
+import 'package:flutter/cupertino.dart';
 import 'package:path/path.dart' as path;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -323,6 +324,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   }
 
   void _startVaultEntryPress() {
+    if (!ref.read(settingsProvider).safeFolderEnabled) return;
     if (selectedIndex != 0 || isSelectionMode || _isOpeningVault) return;
     _vaultHoldTimer?.cancel();
     setState(() {
@@ -1460,6 +1462,206 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     }
   }
 
+  Future<void> _restoreAllFromRecycleBin() async {
+    if (isRecycleActionInProgress || recycleBinItems.isEmpty) return;
+    
+    final confirm = await showCupertinoDialog<bool>(
+      context: context,
+      builder: (context) => CupertinoAlertDialog(
+        title: const Text('Restore All Items?'),
+        content: const Text('Every item in the Recycle Bin will be moved back to your gallery.'),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.pop(context, false),
+          ),
+          CupertinoDialogAction(
+            isDefaultAction: true,
+            child: const Text('Restore All'),
+            onPressed: () => Navigator.pop(context, true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() {
+      isRecycleActionInProgress = true;
+    });
+    try {
+      await recycleBinDatabase.clearAll();
+      if (!mounted) return;
+      await _refreshMediaAfterRecycleChange();
+      if (!mounted) return;
+      _showRecycleSnackBar('All items restored successfully');
+    } finally {
+      if (mounted) {
+        setState(() {
+          isRecycleActionInProgress = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _emptyRecycleBin() async {
+    if (isRecycleActionInProgress || recycleBinItems.isEmpty) return;
+
+    final confirm = await showCupertinoDialog<bool>(
+      context: context,
+      builder: (context) => CupertinoAlertDialog(
+        title: const Text('Empty Recycle Bin?', style: TextStyle(color: Colors.red)),
+        content: const Text('This will permanently delete all items in the Recycle Bin. This action cannot be undone.'),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.pop(context, false),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            child: const Text('Delete Forever'),
+            onPressed: () => Navigator.pop(context, true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() {
+      isRecycleActionInProgress = true;
+    });
+    try {
+      final ids = recycleBinItems.map((e) => e.id).toList();
+      await PhotoManager.editor.deleteWithIds(ids);
+      await recycleBinDatabase.clearAll();
+      if (!mounted) return;
+      await _refreshMediaAfterRecycleChange();
+      if (!mounted) return;
+      _showRecycleSnackBar('Recycle bin emptied');
+    } finally {
+      if (mounted) {
+        setState(() {
+          isRecycleActionInProgress = false;
+        });
+      }
+    }
+  }
+
+  void _showRecycleBinMenu() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : const Color(0xFF211A33);
+
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'RecycleBinMenu',
+      barrierColor: Colors.black26,
+      transitionDuration: const Duration(milliseconds: 240),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.8, end: 1.0).animate(
+            CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
+          ),
+          alignment: Alignment.topRight,
+          child: FadeTransition(opacity: animation, child: child),
+        );
+      },
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => Navigator.pop(dialogContext),
+                child: Container(color: Colors.transparent),
+              ),
+            ),
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 56,
+              right: 16,
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(24),
+                blurSigma: 20,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 240),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildRecyclePopupItem(
+                          icon: Icons.restore_rounded,
+                          title: 'Restore all items',
+                          isDark: isDark,
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            _restoreAllFromRecycleBin();
+                          },
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          child: Divider(color: textColor.withValues(alpha: 0.1), height: 1),
+                        ),
+                        _buildRecyclePopupItem(
+                          icon: Icons.delete_forever_rounded,
+                          title: 'Empty Recycle Bin',
+                          isDark: isDark,
+                          isDestructive: true,
+                          onTap: () {
+                            Navigator.pop(dialogContext);
+                            _emptyRecycleBin();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildRecyclePopupItem({
+    required IconData icon,
+    required String title,
+    required bool isDark,
+    required VoidCallback onTap,
+    bool isDestructive = false,
+  }) {
+    final textColor = isDestructive 
+        ? const Color(0xFFD55B65) 
+        : (isDark ? Colors.white : const Color(0xFF211A33));
+
+    return InkWell(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap();
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Icon(icon, size: 20, color: textColor.withValues(alpha: 0.85)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _formatRecycleDate(DateTime date) {
     final time = TimeOfDay.fromDateTime(date).format(context);
     return '${date.day}/${date.month}/${date.year} • $time';
@@ -1522,9 +1724,13 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
       physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
       cacheExtent: 1400,
       slivers: [
-        if (onRefresh != null) PremiumRefreshControl(onRefresh: onRefresh),
+        if (onRefresh != null)
+          PremiumRefreshControl(
+            onRefresh: onRefresh,
+            topPadding: MediaQuery.of(context).padding.top + kToolbarHeight,
+          ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 120),
+          padding: EdgeInsets.fromLTRB(8, MediaQuery.of(context).padding.top + kToolbarHeight + 8, 8, 20),
           sliver: SliverFixedExtentList(
             itemExtent: 116,
             delegate: SliverChildBuilderDelegate((context, index) {
@@ -3201,7 +3407,14 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           _pinchAccumulator = 1.0;
           _pinchStepConsumed = false;
         },
-        child: CustomScrollView(
+        child: RawScrollbar(
+          controller: controller,
+          interactive: true,
+          thickness: 6.0,
+          radius: const Radius.circular(8),
+          thumbVisibility: false,
+          thumbColor: colorScheme.onSurface.withValues(alpha: 0.4),
+          child: CustomScrollView(
           key: controller == scrollController
               ? _galleryScrollKey
               : controller == favoritesScrollController
@@ -3211,15 +3424,19 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           cacheExtent: 600,
           physics: _isPinching
               ? const NeverScrollableScrollPhysics()
-              : const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+              : const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics(decelerationRate: ScrollDecelerationRate.normal)),
           slivers: [
             if (onRefresh != null)
-              PremiumRefreshControl(onRefresh: onRefresh),
+              PremiumRefreshControl(
+                onRefresh: onRefresh,
+                topPadding: MediaQuery.of(context).padding.top + kToolbarHeight,
+              ),
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(4, 2, 4, 110),
+              padding: EdgeInsets.fromLTRB(4, MediaQuery.of(context).padding.top + kToolbarHeight + 4, 4, 110),
               sliver: SliverMainAxisGroup(slivers: slivers),
             ),
           ],
+         ),
         ),
       ),
     );
@@ -3478,158 +3695,164 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
             key: _scaffoldKey,
             backgroundColor: Colors.transparent,
             extendBody: true,
+            extendBodyBehindAppBar: true,
             endDrawer: _buildEndDrawer(context),
             onEndDrawerChanged: (isOpen) {
               if (isOpen) {
                 HapticFeedback.selectionClick();
               }
             },
-            appBar: showTopChrome
-                ? PreferredSize(
-                    preferredSize: const Size.fromHeight(kToolbarHeight),
-                    child: AppBar(
-                      leading: isSelectionMode
-                          ? IconButton(
-                              tooltip: 'Close selection',
-                              icon: const Icon(Icons.close_rounded),
-                              onPressed: clearSelection,
-                            )
-                          : (selectedIndex != 0 
-                              ? IconButton(
-                                  icon: const Icon(Icons.arrow_back_rounded),
-                                  onPressed: () {
-                                    setState(() {
-                                      selectedIndex = 0;
-                                      _primaryTabIndex = 0;
-                                    });
-                                  },
-                                )
-                              : null),
-                      title: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 360),
-                        transitionBuilder: (child, animation) {
-                          return FadeTransition(
-                            opacity: animation,
-                            child: SlideTransition(
-                              position: Tween<Offset>(
-                                begin: const Offset(0, 0.15),
-                                end: Offset.zero,
-                              ).animate(animation),
-                              child: child,
-                            ),
-                          );
-                        },
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onTapDown: isSelectionMode || selectedIndex != 0
-                              ? null
-                              : (_) => _startVaultEntryPress(),
-                          onTapUp: isSelectionMode || selectedIndex != 0
-                              ? null
-                              : (_) => _cancelVaultEntryPress(),
-                          onTapCancel: isSelectionMode || selectedIndex != 0
-                              ? null
-                              : _cancelVaultEntryPress,
-                          child: AnimatedScale(
-                            scale: _isVaultEntryPressing ? 0.96 : 1,
-                            duration: const Duration(milliseconds: 180),
-                            curve: Curves.easeOutCubic,
-                            child: Text(
-                              isSelectionMode
-                                  ? '$count selected'
-                                  : titles[selectedIndex],
-                              key: ValueKey('${selectedIndex}_$count'),
-                            ),
+            appBar: PreferredSize(
+              preferredSize: const Size.fromHeight(kToolbarHeight),
+              child: AnimatedSlide(
+                offset: showTopChrome ? Offset.zero : const Offset(0, -1),
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.fastOutSlowIn,
+                child: AnimatedOpacity(
+                  opacity: showTopChrome ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: AppBar(
+                    automaticallyImplyLeading: false,
+                    scrolledUnderElevation: 0,
+                    elevation: 0,
+                    leading: isSelectionMode
+                        ? IconButton(
+                            tooltip: 'Close selection',
+                            icon: const Icon(Icons.close_rounded, size: 24),
+                            onPressed: clearSelection,
+                          )
+                        : (selectedIndex != 0
+                            ? IconButton(
+                                icon: const Icon(Icons.arrow_back_rounded, size: 24),
+                                onPressed: () {
+                                  setState(() {
+                                    selectedIndex = 0;
+                                    _primaryTabIndex = 0;
+                                  });
+                                },
+                              )
+                            : null),
+                    titleSpacing: 0,
+                    title: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 360),
+                      transitionBuilder: (child, animation) {
+                        return FadeTransition(
+                          opacity: animation,
+                          child: SlideTransition(
+                            position: Tween<Offset>(
+                              begin: const Offset(0, 0.1),
+                              end: Offset.zero,
+                            ).animate(animation),
+                            child: child,
                           ),
-                        ),
-                      ),
-                      backgroundColor: Colors.transparent,
-                      surfaceTintColor: Colors.transparent,
-                      flexibleSpace: ClipRect(
-                        child: BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: topBarColor.withValues(alpha: isDark ? 0.75 : 0.82),
-                              border: Border(
-                                bottom: BorderSide(
-                                  color: (isDark ? Colors.white : Colors.black)
-                                      .withValues(alpha: isDark ? 0.1 : 0.06),
-                                  width: 1.0,
-                                ),
+                        );
+                      },
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTapDown: isSelectionMode || selectedIndex != 0
+                            ? null
+                            : (_) => _startVaultEntryPress(),
+                        onTapUp: isSelectionMode || selectedIndex != 0
+                            ? null
+                            : (_) => _cancelVaultEntryPress(),
+                        onTapCancel: isSelectionMode || selectedIndex != 0
+                            ? null
+                            : _cancelVaultEntryPress,
+                        child: AnimatedScale(
+                          scale: _isVaultEntryPressing ? 0.96 : 1,
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                              left: (selectedIndex == 0 && !isSelectionMode) ? 18 : 0,
+                            ),
+                            child: Text(
+                              isSelectionMode ? '$count selected' : titles[selectedIndex],
+                              key: ValueKey('${selectedIndex}_$count'),
+                              style: TextStyle(
+                                color: colorScheme.onSurface,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
                           ),
                         ),
                       ),
-                      systemOverlayStyle: overlayStyle.copyWith(
-                        statusBarColor: Colors.transparent,
-                        systemNavigationBarColor: Colors.transparent,
-                        systemNavigationBarDividerColor: Colors.transparent,
-                        systemNavigationBarContrastEnforced: false,
+                    ),
+                    backgroundColor: Colors.transparent,
+                    surfaceTintColor: Colors.transparent,
+                    flexibleSpace: ClipRect(
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: topBarColor.withValues(alpha: isDark ? 0.75 : 0.82),
+                            border: Border(
+                              bottom: BorderSide(
+                                color: (isDark ? Colors.white : Colors.black).withValues(alpha: isDark ? 0.1 : 0.06),
+                                width: 1.0,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                      actions: [
-                        if (isSelectionMode) ...[
-                          if (selectedIndex == 2)
-                            IconButton(
-                              tooltip: 'Unfavorite',
-                              icon: const Icon(Icons.favorite_rounded),
-                              onPressed: unfavoriteSelection,
-                            ),
-                          if (selectedIndex != 2 && selectedIndex != 4) ...[
-                            IconButton(
-                              tooltip: 'Favorite',
-                              icon: const Icon(Icons.favorite_border_rounded),
-                              onPressed: favoriteSelection,
-                            ),
-                            IconButton(
-                              tooltip: 'Move to Safe Folder',
-                              icon: const Icon(Icons.lock_outline_rounded),
-                              onPressed: moveSelectionToVault,
-                            ),
-                            IconButton(
-                              tooltip: 'Move to Recycle Bin',
-                              icon: const Icon(Icons.delete_outline_rounded),
-                              onPressed: moveSelectionToRecycleBin,
-                            ),
-                          ],
-                          if (selectedIndex == 4) ...[
-                            IconButton(
-                              tooltip: 'Restore',
-                              icon: const Icon(Icons.restore_rounded),
-                              onPressed: isRecycleActionInProgress
-                                  ? null
-                                  : restoreSelectionFromRecycleBin,
-                            ),
-                            IconButton(
-                              tooltip: 'Delete forever',
-                              icon: const Icon(Icons.delete_forever_rounded),
-                              onPressed: isRecycleActionInProgress
-                                  ? null
-                                  : deleteSelectionForever,
-                            ),
-                          ],
+                    ),
+                    systemOverlayStyle: overlayStyle.copyWith(
+                      statusBarColor: Colors.transparent,
+                      systemNavigationBarColor: Colors.transparent,
+                      systemNavigationBarDividerColor: Colors.transparent,
+                      systemNavigationBarContrastEnforced: false,
+                    ),
+                    actions: [
+                      if (isSelectionMode) ...[
+                        if (selectedIndex == 2)
                           IconButton(
-                            tooltip: 'Actions',
-                            icon: const Icon(Icons.more_vert_rounded),
-                            onPressed: _showSelectionMenu,
+                            tooltip: 'Unfavorite',
+                            icon: const Icon(Icons.favorite_rounded),
+                            onPressed: unfavoriteSelection,
+                          ),
+                        if (selectedIndex != 2 && selectedIndex != 4) ...[
+                          IconButton(
+                            tooltip: 'Favorite',
+                            icon: const Icon(Icons.favorite_border_rounded),
+                            onPressed: favoriteSelection,
+                          ),
+                          IconButton(
+                            tooltip: 'Move to Safe Folder',
+                            icon: const Icon(Icons.lock_outline_rounded),
+                            onPressed: moveSelectionToVault,
+                          ),
+                          IconButton(
+                            tooltip: 'Move to Recycle Bin',
+                            icon: const Icon(Icons.delete_outline_rounded),
+                            onPressed: moveSelectionToRecycleBin,
                           ),
                         ],
-                        if (!isSelectionMode) ...[
-                          if (selectedIndex == 4)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 14),
-                              child: Center(
-                                child: Text(
-                                  'Tap for actions • Swipe restore/delete',
-                                  style: TextStyle(
-                                    color: colorScheme.onSurface.withValues(alpha: 0.7),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ),
+                        if (selectedIndex == 4) ...[
+                          IconButton(
+                            tooltip: 'Restore',
+                            icon: const Icon(Icons.restore_rounded),
+                            onPressed: isRecycleActionInProgress ? null : restoreSelectionFromRecycleBin,
+                          ),
+                          IconButton(
+                            tooltip: 'Delete forever',
+                            icon: const Icon(Icons.delete_forever_rounded),
+                            onPressed: isRecycleActionInProgress ? null : deleteSelectionForever,
+                          ),
+                        ],
+                        IconButton(
+                          tooltip: 'Actions',
+                          icon: const Icon(Icons.more_vert_rounded),
+                          onPressed: _showSelectionMenu,
+                        ),
+                      ] else ...[
+                        if (selectedIndex == 4) ...[
+                          IconButton(
+                            tooltip: 'Recycle Bin Actions',
+                            icon: const Icon(Icons.more_vert_rounded),
+                            onPressed: _showRecycleBinMenu,
+                          ),
+                        ] else ...[
                           Hero(
                             tag: 'search_icon',
                             child: IconButton(
@@ -3651,12 +3874,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
                           ),
                         ],
                       ],
-                    ),
-                  )
-                : const PreferredSize(
-                    preferredSize: Size.zero,
-                    child: SizedBox.shrink(),
+                    ],
                   ),
+                ),
+              ),
+            ),
             body: Listener(
               onPointerDown: (_) {
                 if (_dragAutoScrollTimer != null) {
@@ -3665,103 +3887,106 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
                 }
               },
               child: Stack(
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: settings.getBackgroundGradient(isDark),
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
-          ),
-          Positioned(
-            top: -80,
-            right: -40,
-            child: IgnorePointer(
-              child: Container(
-                width: 220,
-                height: 220,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF8B5CF6)
-                      .withValues(alpha: isDark ? 0.05 : 0.08),
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            left: -70,
-            bottom: 80,
-            child: IgnorePointer(
-              child: Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFFC4B5FD)
-                      .withValues(alpha: isDark ? 0.03 : 0.12),
-                ),
-              ),
-            ),
-          ),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 420),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            transitionBuilder: (child, animation) {
-              return FadeTransition(
-                opacity: animation,
-                child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0.02, 0.02),
-                    end: Offset.zero,
-                  ).animate(animation),
-                  child: child,
-                ),
-              );
-            },
-            child: buildBody(visibleImages, colorScheme, isDark, settings),
-          ),
-        ],
-      ),
-    ),
-    bottomNavigationBar: SafeArea(
-      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (audioPlayerService.currentMusic != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: MiniMusicPlayer(
-                audioPlayerService: audioPlayerService,
-                onTap: () {
-                  if (audioPlayerService.currentMusic != null) {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => MusicPlayerScreen(
-                          music: audioPlayerService.currentMusic!,
-                          audioPlayerService: audioPlayerService,
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: settings.getBackgroundGradient(isDark),
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: -80,
+                    right: -40,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 220,
+                        height: 220,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF8B5CF6).withValues(alpha: isDark ? 0.05 : 0.08),
                         ),
                       ),
-                    );
-                  }
-                },
+                    ),
+                  ),
+                  Positioned(
+                    left: -70,
+                    bottom: 80,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 200,
+                        height: 200,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFFC4B5FD).withValues(alpha: isDark ? 0.03 : 0.12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 420),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (child, animation) {
+                      return FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0.02, 0.02),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: buildBody(visibleImages, colorScheme, isDark, settings),
+                  ),
+                ],
               ),
             ),
-          ClipRect(
-            child: buildBottomBar(context, isDark, settings),
+            bottomNavigationBar: AnimatedSlide(
+              offset: (showTopChrome && selectedIndex != 4) ? Offset.zero : const Offset(0, 1.25),
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.fastOutSlowIn,
+              child: SafeArea(
+                minimum: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (audioPlayerService.currentMusic != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: MiniMusicPlayer(
+                          audioPlayerService: audioPlayerService,
+                          onTap: () {
+                            if (audioPlayerService.currentMusic != null) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => MusicPlayerScreen(
+                                    music: audioPlayerService.currentMusic!,
+                                    audioPlayerService: audioPlayerService,
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                      ),
+                    ClipRect(
+                      child: buildBottomBar(context, isDark, settings),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ],
-      ),
-    ),
-  ),
-);
-},
-);
-}
+        );
+      },
+    );
+  }
 }
 
 class _BottomNavItemData {

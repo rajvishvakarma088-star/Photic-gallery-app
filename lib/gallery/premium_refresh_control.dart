@@ -5,17 +5,19 @@ import 'package:flutter/services.dart';
 
 class PremiumRefreshControl extends StatelessWidget {
   final Future<void> Function() onRefresh;
+  final double topPadding;
 
   const PremiumRefreshControl({
     super.key,
     required this.onRefresh,
+    this.topPadding = 0,
   });
 
   @override
   Widget build(BuildContext context) {
     return CupertinoSliverRefreshControl(
-      refreshTriggerPullDistance: 140.0,
-      refreshIndicatorExtent: 60.0,
+      refreshTriggerPullDistance: 120.0 + topPadding,
+      refreshIndicatorExtent: 50.0 + topPadding,
       onRefresh: onRefresh,
       builder: (
         context,
@@ -23,20 +25,26 @@ class PremiumRefreshControl extends StatelessWidget {
         pulledExtent,
         refreshTriggerPullDistance,
         refreshIndicatorExtent,
-        ) {
+      ) {
         // Add a 30px "Dead Zone" to prevent flickering on accidental slight pulls
         const double deadZone = 30.0;
-        final double effectivePulled = math.max(0.0, pulledExtent - deadZone);
-        final double effectiveTrigger = refreshTriggerPullDistance - deadZone;
-        final double percentage = (effectivePulled / effectiveTrigger).clamp(0.0, 1.0);
+        final double effectivePulled = math.max(0.0, pulledExtent - deadZone - topPadding);
+        final double effectiveTrigger = refreshTriggerPullDistance - deadZone - topPadding;
+        final double percentage = (effectiveTrigger > 0) 
+            ? (effectivePulled / effectiveTrigger).clamp(0.0, 1.0)
+            : 0.0;
         
         return Container(
           height: pulledExtent,
+          padding: EdgeInsets.only(top: topPadding),
           alignment: Alignment.center,
-          child: _PremiumRefreshIndicatorUI(
-            refreshState: refreshState,
-            pulledExtent: pulledExtent,
-            percentage: percentage,
+          // Clip content to prevent overflow during early stages of pulling
+          child: ClipRect(
+            child: _PremiumRefreshIndicatorUI(
+              refreshState: refreshState,
+              pulledExtent: pulledExtent,
+              percentage: percentage,
+            ),
           ),
         );
       },
@@ -110,9 +118,9 @@ class _PremiumRefreshIndicatorUIState extends State<_PremiumRefreshIndicatorUI> 
     // The "Morphing" logic
     final double scale = widget.refreshState == RefreshIndicatorMode.refresh 
         ? 1.0 
-        : (0.4 + (0.6 * widget.percentage)).clamp(0.0, 1.2);
+        : (0.6 + (0.4 * widget.percentage)).clamp(0.0, 1.2);
     
-    final double opacity = (widget.percentage * 2).clamp(0.0, 1.0);
+    final double opacity = (widget.percentage * 2.0).clamp(0.0, 1.0);
     final double rotation = widget.refreshState == RefreshIndicatorMode.refresh
         ? 0.0 // Handled by rotation controller
         : widget.percentage * math.pi;
@@ -136,12 +144,19 @@ class _PremiumRefreshIndicatorUIState extends State<_PremiumRefreshIndicatorUI> 
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: colorScheme.surface.withValues(alpha: 0.15),
+          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
           shape: BoxShape.circle,
           border: Border.all(
             color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.1),
-            width: 1,
+            width: 1.5,
           ),
+          boxShadow: [
+            BoxShadow(
+              color: colorScheme.primary.withValues(alpha: 0.15 * widget.percentage),
+              blurRadius: 12 * widget.percentage,
+              spreadRadius: 2 * widget.percentage,
+            ),
+          ],
         ),
         child: Icon(
           Icons.manage_search_rounded,
@@ -176,7 +191,7 @@ class _PremiumSpinPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.5
+      ..strokeWidth = 3.8
       ..strokeCap = StrokeCap.round;
 
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
@@ -189,10 +204,10 @@ class _PremiumSpinPainter extends CustomPainter {
     final gradient = SweepGradient(
       colors: [
         color.withValues(alpha: 0.0),
-        color.withValues(alpha: 0.5),
+        color.withValues(alpha: 0.4),
         color,
       ],
-      stops: const [0.0, 0.5, 1.0],
+      stops: const [0.0, 0.4, 1.0],
     );
     
     paint.shader = gradient.createShader(rect);

@@ -360,51 +360,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                         onTap: () {},
                       ),
-                    _buildSettingsTile(
-                      context: context,
-                      icon: Icons.dashboard_customize_rounded,
-                      title: 'Show Hidden Media',
-                      subtitle: 'Display hidden files and folders',
-                      iconColor: isDark ? const Color(0xFFAFA2CC) : const Color(0xFF7060A0),
-                      iconBgColor: isDark ? const Color(0xFF2A273A) : const Color(0xFFF2EFFF),
-                      trailing: Switch(
-                        value: settings.showHidden,
-                        onChanged: (value) {
-                          ref.read(settingsProvider.notifier).toggleShowHidden(value);
-                        },
-                      ),
-                      onTap: () {},
-                    ),
-                    _buildSettingsTile(
-                      context: context,
-                      icon: Icons.animation_rounded,
-                      title: 'Animations',
-                      subtitle: 'Enable UI transitions and effects',
-                      iconColor: isDark ? const Color(0xFFCA9DFD) : const Color(0xFFA151EA),
-                      iconBgColor: isDark ? const Color(0xFF2D2342) : const Color(0xFFF6E7FE),
-                      trailing: Switch(
-                        value: settings.animationsEnabled,
-                        onChanged: (value) {
-                          ref.read(settingsProvider.notifier).toggleAnimations(value);
-                        },
-                      ),
-                      onTap: () {},
-                    ),
-                    _buildSettingsTile(
-                      context: context,
-                      icon: Icons.auto_awesome_mosaic_rounded,
-                      title: 'Rounded Thumbnails',
-                      subtitle: 'Use smooth curves for media grid',
-                      iconColor: const Color(0xFFCA9DFD),
-                      iconBgColor: isDark ? const Color(0xFF2D2342) : const Color(0xFFF6E7FE),
-                      trailing: Switch(
-                        value: settings.roundedThumbnails,
-                        onChanged: (value) {
-                          ref.read(settingsProvider.notifier).toggleRoundedThumbnails(value);
-                        },
-                      ),
-                      onTap: () {},
-                    ),
+
+
+
                     _buildSettingsTile(
                       context: context,
                       icon: Icons.refresh_rounded,
@@ -420,33 +378,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ),
                       onTap: () {},
                     ),
+
+
                     _buildSettingsTile(
                       context: context,
-                      icon: Icons.info_outline_rounded,
-                      title: 'Show File Info',
-                      subtitle: 'Display size and date on thumbnails',
+                      icon: Icons.lock_outline_rounded,
+                      title: 'Safe Folder',
+                      subtitle: 'Press and hold gallery text 2 to 3 seconds to open the hidden folder',
                       iconColor: isDark ? const Color(0xFFEEA297) : const Color(0xFFDD6153),
                       iconBgColor: isDark ? const Color(0xFF322629) : const Color(0xFFFCE9E6),
                       trailing: Switch(
-                        value: settings.showFileSize,
+                        value: settings.safeFolderEnabled,
                         onChanged: (value) {
-                          ref.read(settingsProvider.notifier).toggleShowFileSize(value);
-                          ref.read(settingsProvider.notifier).toggleShowFileDate(value);
-                        },
-                      ),
-                      onTap: () {},
-                    ),
-                    _buildSettingsTile(
-                      context: context,
-                      icon: Icons.auto_awesome_rounded,
-                      title: 'AI Smart Search',
-                      subtitle: 'Enable local AI object and face detection',
-                      iconColor: const Color(0xFFEEA297),
-                      iconBgColor: isDark ? const Color(0xFF322629) : const Color(0xFFFCE9E6),
-                      trailing: Switch(
-                        value: settings.aiTagging,
-                        onChanged: (value) {
-                          ref.read(settingsProvider.notifier).toggleAiTagging(value);
+                          ref.read(settingsProvider.notifier).toggleSafeFolder(value);
                         },
                       ),
                       onTap: () {},
