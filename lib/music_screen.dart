@@ -255,6 +255,7 @@ class _MusicScreenState extends ConsumerState<MusicScreen> with WidgetsBindingOb
         ? SystemUiOverlayStyle.light
         : SystemUiOverlayStyle.dark).copyWith(
             statusBarColor: Colors.transparent,
+            statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
             systemNavigationBarColor: Colors.transparent,
             systemNavigationBarDividerColor: Colors.transparent,
             systemNavigationBarContrastEnforced: false,
@@ -322,6 +323,7 @@ class _MusicScreenState extends ConsumerState<MusicScreen> with WidgetsBindingOb
         ),
       body: Stack(
         children: [
+          // 1. Base Gradient Background
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
@@ -333,6 +335,38 @@ class _MusicScreenState extends ConsumerState<MusicScreen> with WidgetsBindingOb
               ),
             ),
           ),
+          // 2. Decorative Orbs
+          Positioned(
+            top: -80,
+            right: -40,
+            child: IgnorePointer(
+              child: Container(
+                width: 220,
+                height: 220,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF8B5CF6)
+                      .withValues(alpha: isDark ? 0.05 : 0.08),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: -70,
+            bottom: 80,
+            child: IgnorePointer(
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFC4B5FD)
+                      .withValues(alpha: isDark ? 0.03 : 0.12),
+                ),
+              ),
+            ),
+          ),
+          // 3. Content
           if (isLoading)
             Center(
               child: CircularProgressIndicator(color: colorScheme.primary),

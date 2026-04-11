@@ -473,7 +473,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
           ),
         ),
         systemOverlayStyle: overlayStyle.copyWith(
-          statusBarColor: topBarColor,
+          statusBarColor: Colors.transparent,
           statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
         ),
         actions: [
@@ -516,18 +516,33 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
             ),
           ),
           
-          // 2. Decorative Orb (Top Right)
+          // 2. Decorative Orbs
           Positioned(
-            top: -100,
-            right: -60,
+            top: -80,
+            right: -40,
             child: IgnorePointer(
               child: Container(
-                width: 250,
-                height: 250,
+                width: 220,
+                height: 220,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: (isDark ? const Color(0xFF6366F1) : const Color(0xFF8B5CF6))
-                      .withValues(alpha: isDark ? 0.08 : 0.12),
+                  color: const Color(0xFF8B5CF6)
+                      .withValues(alpha: isDark ? 0.05 : 0.08),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: -70,
+            bottom: 80,
+            child: IgnorePointer(
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFC4B5FD)
+                      .withValues(alpha: isDark ? 0.03 : 0.12),
                 ),
               ),
             ),

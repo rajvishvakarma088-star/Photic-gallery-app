@@ -66,6 +66,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ? SystemUiOverlayStyle.light
         : SystemUiOverlayStyle.dark).copyWith(
             statusBarColor: Colors.transparent,
+            statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
             systemNavigationBarColor: Colors.transparent,
             systemNavigationBarDividerColor: Colors.transparent,
             systemNavigationBarContrastEnforced: false,
@@ -110,37 +111,75 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
         systemOverlayStyle: overlayStyle,
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: settings.getBackgroundGradient(isDark),
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+      body: Stack(
+        children: [
+          // 1. Base Gradient Background
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: settings.getBackgroundGradient(isDark),
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 104, 20, 32),
-            physics: const BouncingScrollPhysics(),
-            children: [
-              // App Info Card
-              Container(
-                padding: const EdgeInsets.all(20),
+          // 2. Decorative Orbs
+          Positioned(
+            top: -80,
+            right: -40,
+            child: IgnorePointer(
+              child: Container(
+                width: 220,
+                height: 220,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(28),
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: isDark
-                        ? [
-                            settings.amoledMode ? const Color(0xFF0A0A0A) : const Color(0xFF1E1E1E),
-                            settings.amoledMode ? const Color(0xFF121212) : const Color(0xFF252525),
-                          ]
-                        : [
-                            const Color(0xFFFFFFFF),
-                            const Color(0xFFF4F4F4),
-                          ],
-                  ),
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF8B5CF6)
+                      .withValues(alpha: isDark ? 0.05 : 0.08),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: -70,
+            bottom: 80,
+            child: IgnorePointer(
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFC4B5FD)
+                      .withValues(alpha: isDark ? 0.03 : 0.12),
+                ),
+              ),
+            ),
+          ),
+          // 3. Content
+          SafeArea(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 104, 20, 32),
+              physics: const BouncingScrollPhysics(),
+              children: [
+                // App Info Card
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(28),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: isDark
+                          ? [
+                              settings.amoledMode ? const Color(0xFF0A0A0A) : const Color(0xFF1E1E1E),
+                              settings.amoledMode ? const Color(0xFF121212) : const Color(0xFF252525),
+                            ]
+                          : [
+                              const Color(0xFFFFFFFF),
+                              const Color(0xFFF4F4F4),
+                            ],
+                    ),
                   border: Border.all(
                     color: (isDark ? Colors.white : Colors.black)
                         .withValues(alpha: isDark ? 0.1 : 0.08),
@@ -418,9 +457,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
+      ],
+    ),
+  );
+}
 
   Widget _buildSettingsTile({
     required BuildContext context,
