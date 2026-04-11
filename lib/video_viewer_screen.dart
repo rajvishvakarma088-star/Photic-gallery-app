@@ -10,15 +10,18 @@ import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
 import 'services/favorites_database.dart';
 import 'utils/fast_page_scroll_physics.dart';
+import 'providers/settings_provider.dart';
 
 class VideoViewerScreen extends StatefulWidget {
   final List<AssetEntity> videos;
   final int initialIndex;
+  final SettingsState? settings;
 
   const VideoViewerScreen({
     super.key,
     required this.videos,
     required this.initialIndex,
+    this.settings,
   });
 
   @override
@@ -587,7 +590,8 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
       blurSigma: 24,
       borderColor: Colors.white.withValues(alpha: isDark ? 0.15 : 0.25),
       backgroundColor: isDark
-          ? const Color(0xFF161616).withValues(alpha: 0.85)
+          ? (widget.settings?.getBottomBarColor(isDark) ?? const Color(0xFF080808))
+              .withValues(alpha: 0.85)
           : Colors.white.withValues(alpha: 0.9),
       child: Stack(
         children: [

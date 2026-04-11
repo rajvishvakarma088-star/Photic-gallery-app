@@ -74,6 +74,29 @@ class SettingsState {
     }
     return themeMode == ThemeMode.dark;
   }
+
+  List<Color> getBackgroundGradient(bool isDark) {
+    if (isDark) {
+      return amoledMode
+          ? const [Color(0xFF000000), Color(0xFF020202), Color(0xFF050505)]
+          : const [Color(0xFF050505), Color(0xFF080808), Color(0xFF0C0C0C)];
+    }
+    return const [Color(0xFFFFFFFF), Color(0xFFF9F9F9), Color(0xFFF0F0F0)];
+  }
+
+  Color getBottomBarColor(bool isDark) {
+    if (isDark) {
+      return amoledMode ? Colors.black : const Color(0xFF080808);
+    }
+    return Colors.white;
+  }
+
+  Color getTopBarColor(bool isDark) {
+    if (isDark) {
+      return amoledMode ? Colors.black : const Color(0xFF080808);
+    }
+    return const Color(0xFFF1E8FF);
+  }
 }
 
 class SettingsNotifier extends Notifier<SettingsState> {

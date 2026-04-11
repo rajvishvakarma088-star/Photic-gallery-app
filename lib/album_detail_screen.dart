@@ -423,12 +423,18 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final isDark = settings.isDark(context);
-    final topBarColor =
-        isDark ? const Color(0xFF0A0A0A) : const Color(0xFFFBFBFB);
-    final overlayStyle =
-        isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark;
+    final topBarColor = settings.getTopBarColor(isDark).withValues(alpha: 0.85);
+    final overlayStyle = (isDark
+        ? SystemUiOverlayStyle.light
+        : SystemUiOverlayStyle.dark).copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            systemNavigationBarContrastEnforced: false,
+          );
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       backgroundColor: Colors.transparent,
       appBar: AppBar(
         leading: isSelectionMode
@@ -437,27 +443,17 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
                 icon: const Icon(Icons.close_rounded),
                 onPressed: () => setState(() => selectedAssetIds.clear()),
               )
-            : null,
-        title: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 360),
-          transitionBuilder: (child, animation) => FadeTransition(
-            opacity: animation,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0, 0.15),
-                end: Offset.zero,
-              ).animate(animation),
-              child: child,
-            ),
-          ),
-          child: Text(
-            isSelectionMode
-                ? '${selectedAssetIds.length} selected'
-                : widget.title,
-            key: ValueKey('${widget.title}-${selectedAssetIds.length}'),
-          ),
+            : IconButton(
+                icon: const Icon(Icons.arrow_back_rounded, size: 24),
+                onPressed: () => Navigator.pop(context),
+              ),
+        title: Text(
+          isSelectionMode
+              ? '${selectedAssetIds.length} selected'
+              : widget.title,
         ),
-        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         surfaceTintColor: Colors.transparent,
         flexibleSpace: ClipRect(
           child: BackdropFilter(
@@ -505,62 +501,71 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
           ],
         ],
       ),
-      body: Listener(
-        onPointerDown: (_) {
-          if (_dragAutoScrollTimer != null) {
-            _dragAutoScrollTimer?.cancel();
-            _dragAutoScrollTimer = null;
-          }
-        },
-        child: Stack(
+      body: Stack(
         children: [
-          // Background gradient
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: isDark
-                    ? const [
-                        Color(0xFF050505),
-                        Color(0xFF080808),
-                        Color(0xFF0C0C0C),
-                      ]
-                    : const [
-                        Color(0xFFFFFFFF),
-                        Color(0xFFF9F9F9),
-                        Color(0xFFF0F0F0),
-                      ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
-          ),
-          // Decorative orb
-          Positioned(
-            top: -70,
-            right: -30,
-            child: IgnorePointer(
-              child: Container(
-                width: 210,
-                height: 210,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF8B5CF6)
-                      .withValues(alpha: isDark ? 0.04 : 0.08),
+          // 1. Base Gradient Background
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: settings.getBackgroundGradient(isDark),
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
               ),
             ),
           ),
-          // Main content card
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 8, 10, 18),
-            child: GlassContainer(
-              borderRadius: BorderRadius.circular(30),
-              child: _buildPinchWrapper(isDark),
+          
+          // 2. Decorative Orb (Top Right)
+          Positioned(
+            top: -100,
+            right: -60,
+            child: IgnorePointer(
+              child: Container(
+                width: 250,
+                height: 250,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: (isDark ? const Color(0xFF6366F1) : const Color(0xFF8B5CF6))
+                      .withValues(alpha: isDark ? 0.08 : 0.12),
+                ),
+              ),
             ),
+          ),
+
+          // 3. Main Content Layer
+          Column(
+            children: [
+              // Clear the AppBar + Status Bar area
+              const SizedBox(height: 88),
+              
+              // The large rounded content container
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: isDark 
+                        ? (settings.amoledMode ? Colors.black : const Color(0xFF121212)) 
+                        : Colors.white,
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.05),
+                        blurRadius: 20,
+                        offset: const Offset(0, -5),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(40)),
+                    child: _buildPinchWrapper(isDark, settings),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
-    ),
   );
 }
 
@@ -569,7 +574,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   // GestureDetector, but scoped to the album.
   // ══════════════════════════════════════════════════════════════════════════
 
-  Widget _buildPinchWrapper(bool isDark) {
+  Widget _buildPinchWrapper(bool isDark, SettingsState settings) {
     return Listener(
       onPointerDown: (_) {
         if (_dragAutoScrollTimer != null) {
@@ -646,10 +651,10 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
               child: _buildTabToggle(isDark),
             ),
-            Expanded(child: _buildTabPages()),
+            Expanded(child: _buildTabPages(settings)),
           ],
         ),
       ),
@@ -661,7 +666,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   // and is keyed by its own tab index so Flutter never confuses them.
   // ══════════════════════════════════════════════════════════════════════════
 
-  Widget _buildTabPages() {
+  Widget _buildTabPages(SettingsState settings) {
     return PageView(
       controller: _pageController,
       physics: _isPinching
@@ -686,12 +691,14 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
           assets: albumImages,
           scrollController: _photoScrollController,
           tab: 0,
+          settings: settings,
         ),
         // Page 1 – Videos (always uses _videoScrollController)
         _buildGrid(
           assets: albumVideos,
           scrollController: _videoScrollController,
           tab: 1,
+          settings: settings,
           isLoading: isLoadingVideos,
         ),
       ],
@@ -708,6 +715,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
     required List<AssetEntity> assets,
     required ScrollController scrollController,
     required int tab,
+    required SettingsState settings,
     bool isLoading = false,
   }) {
     if (isLoading) {
@@ -795,6 +803,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
                     VideoViewerScreen(
                       videos: videos,
                       initialIndex: videoIndex < 0 ? 0 : videoIndex,
+                      settings: settings,
                     ),
                   ),
                 );
@@ -819,6 +828,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
                       index: index,
                       initialPreviewProvider: previewProvider,
                       initialViewerProvider: openingProvider,
+                      settings: settings,
                     ),
                   ),
                 );
@@ -925,50 +935,41 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   // ══════════════════════════════════════════════════════════════════════════
 
   Widget _buildTabToggle(bool isDark) {
-    final textColor = isDark ? Colors.white : const Color(0xFF211A33);
-    return GlassContainer(
-      borderRadius: BorderRadius.circular(24),
-      enableBlur: false,
-      child: Padding(
-        padding: const EdgeInsets.all(6),
-        child: Row(
-          children: [
-            Expanded(
-              child: _tabButton(
-                label: 'Photos',
-                count: albumImages.length,
-                selected: selectedMediaTab == 0,
-                textColor: textColor,
-                onTap: () {
-                  if (selectedMediaTab == 0) return;
-                  _pageController.animateToPage(
-                    0,
-                    duration: const Duration(milliseconds: 240),
-                    curve: Curves.easeOutCubic,
-                  );
-                },
-              ),
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: _tabButton(
-                label: 'Videos',
-                count: albumVideos.length,
-                selected: selectedMediaTab == 1,
-                textColor: textColor,
-                loading: isLoadingVideos,
-                onTap: () {
-                  if (selectedMediaTab == 1) return;
-                  _pageController.animateToPage(
-                    1,
-                    duration: const Duration(milliseconds: 240),
-                    curve: Curves.easeOutCubic,
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: Row(
+        children: [
+          _tabButton(
+            label: 'Photos',
+            count: albumImages.length,
+            selected: selectedMediaTab == 0,
+            isDark: isDark,
+            onTap: () {
+              if (selectedMediaTab == 0) return;
+              _pageController.animateToPage(
+                0,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+              );
+            },
+          ),
+          const Spacer(),
+          _tabButton(
+            label: 'Videos',
+            count: albumVideos.length,
+            selected: selectedMediaTab == 1,
+            isDark: isDark,
+            loading: isLoadingVideos,
+            onTap: () {
+              if (selectedMediaTab == 1) return;
+              _pageController.animateToPage(
+                1,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+              );
+            },
+          ),
+        ],
       ),
     );
   }
@@ -977,63 +978,53 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
     required String label,
     required int count,
     required bool selected,
-    required Color textColor,
+    required bool isDark,
     required VoidCallback onTap,
     bool loading = false,
   }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: selected
-                ? Colors.white.withValues(alpha: 0.18)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: selected
-                  ? Colors.white.withValues(alpha: 0.28)
-                  : Colors.transparent,
+    final activeColor = isDark ? Colors.white : const Color(0xFF1A1C1E);
+    final inactiveColor = (isDark ? Colors.white : const Color(0xFF1A1C1E)).withValues(alpha: 0.42);
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: selected ? activeColor : inactiveColor,
+              fontSize: 20,
+              fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+              letterSpacing: -0.4,
             ),
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
+          const SizedBox(width: 8),
+          if (loading && !selected)
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(inactiveColor),
                 ),
               ),
-              const SizedBox(width: 6),
-              if (loading)
-                SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: textColor,
-                  ),
-                )
-              else
-                Text(
-                  '$count',
-                  style: TextStyle(
-                    color: textColor.withValues(alpha: 0.72),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-            ],
-          ),
-        ),
+            )
+          else
+            Text(
+              count.toString(),
+              style: TextStyle(
+                color: selected ? activeColor.withValues(alpha: 0.6) : inactiveColor.withValues(alpha: 0.6),
+                fontSize: 16,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+        ],
       ),
     );
   }

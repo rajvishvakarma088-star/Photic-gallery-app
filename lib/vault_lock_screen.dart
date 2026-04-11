@@ -213,9 +213,15 @@ class _VaultLockScreenState extends ConsumerState<VaultLockScreen>
     final settings = ref.watch(settingsProvider);
     final isDark = settings.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
-    final topBarColor = isDark
-        ? const Color(0xFF0A0A0A)
-        : const Color(0xFFFBFBFB);
+    final topBarColor = settings.getTopBarColor(isDark).withValues(alpha: 0.85);
+    final overlayStyle = (isDark
+        ? SystemUiOverlayStyle.light
+        : SystemUiOverlayStyle.dark).copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            systemNavigationBarContrastEnforced: false,
+          );
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -240,26 +246,18 @@ class _VaultLockScreenState extends ConsumerState<VaultLockScreen>
             ),
           ),
         ),
-        systemOverlayStyle:
-            (isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
-                .copyWith(statusBarColor: topBarColor),
+        systemOverlayStyle: overlayStyle,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, size: 24),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
       body: Stack(
         children: [
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: isDark
-                    ? const [
-                        Color(0xFF050505),
-                        Color(0xFF080808),
-                        Color(0xFF0C0C0C),
-                      ]
-                    : const [
-                        Color(0xFFFFFFFF),
-                        Color(0xFFF9F9F9),
-                        Color(0xFFF0F0F0),
-                      ],
+                colors: settings.getBackgroundGradient(isDark),
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),

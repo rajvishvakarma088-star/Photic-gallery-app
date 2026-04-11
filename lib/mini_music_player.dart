@@ -190,10 +190,10 @@ class _LiquidGlassCard extends StatelessWidget {
     final borderColor =
         isDark ? Colors.white.withOpacity(0.18) : Colors.white.withOpacity(0.72);
     final bgTop = isDark
-        ? const Color(0xFF1A1030).withOpacity(0.72)
+        ? const Color(0xFF0C0814).withOpacity(0.82)
         : Colors.white.withOpacity(0.64);
     final bgBottom = isDark
-        ? themeColor.withOpacity(0.15)
+        ? themeColor.withOpacity(0.22)
         : themeColor.withOpacity(0.06);
 
     return ClipRRect(

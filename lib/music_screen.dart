@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:ui';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'providers/settings_provider.dart';
 import 'package:just_audio/just_audio.dart';
 import 'dart:io';
 import 'package:photo_manager/photo_manager.dart';
@@ -10,7 +13,7 @@ import 'services/audio_player_service.dart';
 import 'services/recycle_bin_database.dart';
 import 'music_player_screen.dart';
 
-class MusicScreen extends StatefulWidget {
+class MusicScreen extends ConsumerStatefulWidget {
   final AudioPlayerService? audioPlayerService;
   final Set<String> selectedIds;
   final Function(AssetEntity) onSelectionToggle;
@@ -23,10 +26,10 @@ class MusicScreen extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  State<MusicScreen> createState() => _MusicScreenState();
+  ConsumerState<MusicScreen> createState() => _MusicScreenState();
 }
 
-class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
+class _MusicScreenState extends ConsumerState<MusicScreen> with WidgetsBindingObserver, AutomaticKeepAliveClientMixin {
   static const int _artworkCacheEntries = 500;
   final MusicService musicService = MusicService();
   late AudioPlayerService audioPlayerService;
@@ -40,6 +43,10 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   String searchQuery = '';
   bool _isNavigating = false;
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _searchFocusNode = FocusNode();
+  bool _hideTopChrome = false;
+  double _lastScrollOffset = 0;
+  final double _scrollThreshold = 20;
 
   @override
   bool get wantKeepAlive => true;
@@ -54,6 +61,29 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   }
 
   void _onScroll() {
+    if (!_scrollController.hasClients) return;
+
+    final offset = _scrollController.offset;
+    final delta = offset - _lastScrollOffset;
+    _lastScrollOffset = offset;
+
+    bool shouldHide;
+    if (offset < _scrollThreshold) {
+      shouldHide = false;
+    } else if (delta > 2) {
+      shouldHide = true;
+    } else if (delta < -2) {
+      shouldHide = false;
+    } else {
+      shouldHide = _hideTopChrome;
+    }
+
+    if (shouldHide != _hideTopChrome) {
+      setState(() {
+        _hideTopChrome = shouldHide;
+      });
+    }
+
     if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 400) {
       if (!isLoadingMore && hasMore && searchQuery.isEmpty) {
         loadMusics();
@@ -65,6 +95,7 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _scrollController.dispose();
+    _searchFocusNode.dispose();
     _artworkCache.clear();
     super.dispose();
   }
@@ -144,7 +175,6 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     }
 
     try {
-      // Load binned IDs to filter
       final binnedIds = await RecycleBinDatabase.instance.loadAssetIds();
       musicService.setBinnedIds(binnedIds);
       
@@ -193,7 +223,6 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
     try {
       HapticFeedback.mediumImpact();
       
-      // Navigate immediately for better perceived performance
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -206,7 +235,6 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
         _isNavigating = false;
       });
 
-      // Start playback in background if not already playing this song
       if (audioPlayerService.currentMusic?.id != music.id) {
         audioPlayerService.setPlaylist(filteredMusics, startIndex: index);
       }
@@ -219,28 +247,86 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final settings = ref.watch(settingsProvider);
     final colorScheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isDark = settings.isDark(context);
+    final topBarColor = settings.getTopBarColor(isDark).withValues(alpha: 0.85);
+    final overlayStyle = (isDark
+        ? SystemUiOverlayStyle.light
+        : SystemUiOverlayStyle.dark).copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            systemNavigationBarContrastEnforced: false,
+          );
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       backgroundColor: Colors.transparent,
+      appBar: !_hideTopChrome
+          ? AppBar(
+        automaticallyImplyLeading: false,
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, size: 24),
+          onPressed: () => Navigator.pop(context),
+        ),
+        titleSpacing: 0,
+        title: Text(
+          'Music',
+          style: TextStyle(
+            color: colorScheme.onSurface,
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Search',
+            icon: const Icon(Icons.search_rounded, size: 24),
+            onPressed: () {
+              _searchFocusNode.requestFocus();
+              _scrollController.animateTo(
+                0,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              decoration: BoxDecoration(
+                color: topBarColor.withValues(alpha: isDark ? 0.75 : 0.82),
+                border: Border(
+                  bottom: BorderSide(
+                    color: (isDark ? Colors.white : Colors.black)
+                        .withValues(alpha: isDark ? 0.1 : 0.06),
+                    width: 1.0,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        systemOverlayStyle: overlayStyle,
+      ) : const PreferredSize(
+          preferredSize: Size.zero,
+          child: SizedBox.shrink(),
+        ),
       body: Stack(
         children: [
           Positioned.fill(
-            child: DecoratedBox(
+            child: Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: isDark
-                      ? const [
-                          Color(0xFF050505),
-                          Color(0xFF080808),
-                          Color(0xFF0C0C0C),
-                        ]
-                      : const [
-                          Color(0xFFFFFFFF),
-                          Color(0xFFF9F9F9),
-                          Color(0xFFF0F0F0),
-                        ],
+                  colors: settings.getBackgroundGradient(isDark),
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -297,126 +383,32 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
               controller: _scrollController,
               physics: const BouncingScrollPhysics(),
               slivers: [
-                SliverAppBar(
-                  pinned: false,
-                  floating: true,
-                  snap: true,
-                  elevation: 0,
-                  scrolledUnderElevation: 0,
-                  surfaceTintColor: Colors.transparent,
-                  backgroundColor: Colors.transparent,
-                  automaticallyImplyLeading: false,
-                  toolbarHeight: 68,
-                  titleSpacing: 16,
-                  title: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Music',
-                        style: TextStyle(
-                          color: colorScheme.onSurface,
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${allMusics.length} tracks',
-                        style: TextStyle(
-                          color: colorScheme.onSurface.withOpacity(0.62),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                  actions: [
-                    IconButton(
-                      tooltip: 'Back',
-                      icon: const Icon(Icons.arrow_back_rounded),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                    const SizedBox(width: 6),
-                  ],
-                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 104)),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
                     child: RepaintBoundary(
                       child: GlassContainer(
                         borderRadius: BorderRadius.circular(32),
                         enableBlur: false,
                         blurSigma: 0,
                         backgroundColor: isDark
-                            ? const Color(0xFF121212).withValues(alpha: 0.94)
-                            : const Color(0xFFFFFFFF).withValues(alpha: 0.96),
-                        borderColor: Colors.white
-                            .withValues(alpha: isDark ? 0.14 : 0.18),
-                        child: Container(
-                          padding: const EdgeInsets.all(18),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Library',
-                                style: TextStyle(
-                                  color: colorScheme.onSurface,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                'Enjoy your collection of songs',
-                                style: TextStyle(
-                                  color: colorScheme.onSurface.withOpacity(0.72),
-                                  height: 1.35,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              Wrap(
-                                spacing: 10,
-                                runSpacing: 10,
-                                children: [
-                                  _buildStatsChip(
-                                    icon: Icons.music_note_rounded,
-                                    label: '${allMusics.length} songs',
-                                    color: colorScheme.primaryContainer
-                                        .withOpacity(0.88),
-                                    textColor: colorScheme.onPrimaryContainer,
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    child: GlassContainer(
-                      borderRadius: BorderRadius.circular(28),
-                      enableBlur: false,
-                      blurSigma: 0,
-                      backgroundColor: isDark
-                          ? const Color(0xFF121212).withValues(alpha: 0.92)
-                          : const Color(0xFFFFFFFF).withValues(alpha: 0.94),
-                      child: TextField(
-                        onChanged: _searchMusics,
-                        decoration: InputDecoration(
-                          hintText: 'Search songs...',
-                          border: InputBorder.none,
-                          prefixIcon: const Icon(Icons.search),
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: 12,
-                            horizontal: 16,
-                          ),
-                          hintStyle: TextStyle(
-                            color: colorScheme.onSurface.withOpacity(0.6),
+                            ? const Color(0xFF121212).withValues(alpha: 0.92)
+                            : const Color(0xFFFFFFFF).withValues(alpha: 0.94),
+                        child: TextField(
+                          focusNode: _searchFocusNode,
+                          onChanged: _searchMusics,
+                          decoration: InputDecoration(
+                            hintText: 'Search songs...',
+                            border: InputBorder.none,
+                            prefixIcon: const Icon(Icons.search),
+                            contentPadding: const EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 16,
+                            ),
+                            hintStyle: TextStyle(
+                              color: colorScheme.onSurface.withOpacity(0.6),
+                            ),
                           ),
                         ),
                       ),
@@ -447,33 +439,57 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
                           if (index == filteredMusics.length) {
                             return Center(
                               child: Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 32),
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: colorScheme.primary.withOpacity(0.5),
+                                padding: const EdgeInsets.all(32),
+                                child: Text(
+                                  'End of collection',
+                                  style: TextStyle(
+                                    color: colorScheme.onSurface.withOpacity(0.6),
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ),
                             );
                           }
+
                           final music = filteredMusics[index];
-                          return Padding(
-                            padding: EdgeInsets.only(
-                              bottom: index == filteredMusics.length - 1 &&
-                                      !isLoadingMore
-                                  ? 0
-                                  : 8,
-                            ),
-                            child: _buildMusicTile(
-                              music,
-                              index,
-                              colorScheme,
-                              isDark,
-                            ),
+                          
+                          return ValueListenableBuilder<MusicFile?>(
+                            valueListenable: audioPlayerService.currentMusicNotifier,
+                            builder: (context, currentMusic, _) {
+                              final isCurrentSong = currentMusic?.id == music.id;
+                              
+                              return StreamBuilder<PlayerState>(
+                                stream: audioPlayerService.playerStateStream,
+                                builder: (context, playerSnapshot) {
+                                  final isPlaying = playerSnapshot.data?.playing ?? false;
+                                  
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 14),
+                                    child: gallery_album_widgets.MusicListItem(
+                                      music: music,
+                                      isCurrent: isCurrentSong,
+                                      isPlaying: isPlaying,
+                                      onTap: () => playMusic(music, index),
+                                      onPlayPause: () {
+                                        if (isCurrentSong) {
+                                          if (isPlaying) {
+                                            audioPlayerService.pause();
+                                          } else {
+                                            audioPlayerService.play();
+                                          }
+                                        } else {
+                                          playMusic(music, index);
+                                        }
+                                      },
+                                    ),
+                                  );
+                                },
+                              );
+                            },
                           );
                         },
-                        childCount:
-                            filteredMusics.length + (isLoadingMore ? 1 : 0),
+                        childCount: filteredMusics.length +
+                            (hasMore && searchQuery.isEmpty ? 1 : 0),
                       ),
                     ),
                   ),
@@ -481,129 +497,6 @@ class _MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver, 
             ),
         ],
       ),
-    );
-  }
-
-  Widget _buildMusicTile(
-    MusicFile music,
-    int index,
-    ColorScheme colorScheme,
-    bool isDark,
-  ) {
-    return ValueListenableBuilder<MusicFile?>(
-      valueListenable: audioPlayerService.currentMusicNotifier,
-      builder: (context, currentMusic, _) {
-        final isCurrentSong = currentMusic?.id == music.id;
-        final isSelected = widget.selectedIds.contains(music.id);
-        final isSelectionMode = widget.selectedIds.isNotEmpty;
-
-        return StreamBuilder<PlayerState>(
-          stream: audioPlayerService.playerStateStream,
-          builder: (context, playerSnapshot) {
-            final isPlaying = playerSnapshot.data?.playing ?? false;
-            final shouldHighlight = isCurrentSong && isPlaying;
-
-            return gallery_album_widgets.buildPremiumListTileShell(
-              colorScheme: colorScheme,
-              isDark: isDark,
-              isSelected: isSelected || shouldHighlight,
-              onTap: () {
-                if (isSelectionMode) {
-                  if (music.asset != null) {
-                    widget.onSelectionToggle(music.asset!);
-                    HapticFeedback.lightImpact();
-                  }
-                } else {
-                  playMusic(music, index);
-                }
-              },
-              onLongPress: () {
-                if (!isSelectionMode && music.asset != null) {
-                  widget.onSelectionToggle(music.asset!);
-                  HapticFeedback.mediumImpact();
-                }
-              },
-              child: Row(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    child: SizedBox(
-                      width: 74,
-                      height: 74,
-                      child: _buildArtwork(music, colorScheme),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          music.displayName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: colorScheme.onSurface,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.1,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '${music.formattedDuration} • ${music.formattedSize}',
-                          style: TextStyle(
-                            color: colorScheme.onSurface.withValues(alpha: 0.68),
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  GestureDetector(
-                    onTap: () {
-                      HapticFeedback.lightImpact();
-                      if (isCurrentSong) {
-                        if (isPlaying) {
-                          audioPlayerService.pause();
-                        } else {
-                          audioPlayerService.play();
-                        }
-                      } else {
-                        audioPlayerService.setPlaylist(
-                          filteredMusics,
-                          startIndex: index,
-                        );
-                      }
-                    },
-                    child: Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: shouldHighlight
-                            ? music.themeColor.withValues(alpha: 0.94)
-                            : colorScheme.primaryContainer
-                                .withValues(alpha: 0.92),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Icon(
-                        isCurrentSong && isPlaying
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                        color: shouldHighlight
-                            ? Colors.white
-                            : colorScheme.onPrimaryContainer,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
     );
   }
 

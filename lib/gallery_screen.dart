@@ -206,6 +206,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     unawaited(_thumbDiskCache.ensureReady());
     scrollController.addListener(onScroll);
     videosScrollController.addListener(onScroll);
+    favoritesScrollController.addListener(onScroll);
+    albumsScrollController.addListener(onScroll);
     recycleBinScrollController.addListener(onScroll);
     loadFavorites();
     unawaited(loadRecycleBin());
@@ -2372,7 +2374,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     );
   }
 
-  Widget buildBottomBar(BuildContext context, bool isDark) {
+  Widget buildBottomBar(BuildContext context, bool isDark, SettingsState settings) {
     final activeIndex = selectedIndex == 4 ? _primaryTabIndex : selectedIndex;
     final items = <_BottomNavItemData>[
       const _BottomNavItemData(
@@ -2403,7 +2405,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
       blurSigma: 14,
       borderColor: Colors.white.withValues(alpha: isDark ? 0.12 : 0.2),
       backgroundColor: isDark
-          ? const Color(0xFF161616).withValues(alpha: 0.72)
+          ? settings.getBottomBarColor(isDark).withValues(alpha: 0.82)
           : Colors.white.withValues(alpha: 0.8),
       child: Stack(
         children: [
@@ -2870,6 +2872,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     AssetEntity asset,
     List<AssetEntity> visibleImages,
     int absoluteIndex,
+    SettingsState settings,
   ) {
     final ImageProvider<Object> previewProvider = _thumbnailProviderFor(
       asset,
@@ -2950,7 +2953,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
               final viewerAction = await Navigator.push<String>(
                 context,
                 buildCinematicRoute(
-                  VideoViewerScreen(videos: videoList, initialIndex: videoIndex),
+                  VideoViewerScreen(
+                    videos: videoList,
+                    initialIndex: videoIndex,
+                    settings: settings,
+                  ),
                 ),
               );
               if ((viewerAction == 'recycle' || viewerAction == 'vault') &&
@@ -2977,6 +2984,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
                     index: absoluteIndex,
                     initialPreviewProvider: previewProvider,
                     initialViewerProvider: openingProvider,
+                    settings: settings,
                   ),
                 ),
               );
@@ -3071,7 +3079,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   Widget buildGridView(
     List<AssetEntity> visibleImages,
     ColorScheme colorScheme,
-    ScrollController controller, {
+    ScrollController controller,
+    SettingsState settings, {
     Future<void> Function()? onRefresh,
   }) {
     final sections = buildSections(visibleImages);
@@ -3098,7 +3107,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
             delegate: SliverChildBuilderDelegate((context, index) {
               final asset = sections[sectionIndex].items[index];
               final absoluteIndex = indexByAssetId[asset.id] ?? 0;
-              return buildGridTile(asset, visibleImages, absoluteIndex);
+              return buildGridTile(asset, visibleImages, absoluteIndex, settings);
             }, childCount: sections[sectionIndex].items.length),
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: galleryGridCount,
@@ -3250,6 +3259,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           visibleImages, 
           colorScheme, 
           favoritesScrollController,
+          settings,
           onRefresh: settings.pullToRefreshEnabled 
             ? () async {
               HapticFeedback.mediumImpact();
@@ -3400,6 +3410,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
         visibleImages, 
         colorScheme, 
         currentController,
+        settings,
         onRefresh: settings.pullToRefreshEnabled
           ? () async {
             HapticFeedback.mediumImpact();
@@ -3416,9 +3427,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     final settings = ref.watch(settingsProvider);
     final isDark = settings.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
-    final topBarColor = isDark
-        ? const Color(0xFF080808).withValues(alpha: 0.85)
-        : const Color(0xFFF1E8FF);
+    final topBarColor = settings.getTopBarColor(isDark).withValues(alpha: 0.85);
     final titles = ['Gallery', 'Videos', 'Favorites', 'Albums', 'Recycle Bin'];
 
     List<AssetEntity> visibleImages = images;
@@ -3660,17 +3669,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: isDark
-                    ? const [
-                        Color(0xFF050505),
-                        Color(0xFF080808),
-                        Color(0xFF0C0C0C),
-                      ]
-                    : const [
-                        Color(0xFFFFFFFF),
-                        Color(0xFFF9F9F9),
-                        Color(0xFFF0F0F0),
-                      ],
+                colors: settings.getBackgroundGradient(isDark),
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -3753,7 +3752,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
               ),
             ),
           ClipRect(
-            child: buildBottomBar(context, isDark),
+            child: buildBottomBar(context, isDark, settings),
           ),
         ],
       ),

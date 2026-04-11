@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../services/gallery_service.dart';
+import '../services/music_service.dart';
 
 Widget buildGalleryStatsChip({
   required IconData icon,
@@ -281,4 +285,137 @@ Widget buildAlbumListTile({
       ],
     ),
   );
+}
+
+class MusicListItem extends StatelessWidget {
+  final MusicFile music;
+  final bool isCurrent;
+  final bool isPlaying;
+  final VoidCallback onTap;
+  final VoidCallback onPlayPause;
+
+  const MusicListItem({
+    Key? key,
+    required this.music,
+    required this.isCurrent,
+    required this.isPlaying,
+    required this.onTap,
+    required this.onPlayPause,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isDark = colorScheme.brightness == Brightness.dark;
+
+    return buildPremiumListTileShell(
+      colorScheme: colorScheme,
+      isDark: isDark,
+      onTap: onTap,
+      isSelected: isCurrent,
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: SizedBox(
+              width: 74,
+              height: 74,
+              child: Stack(
+                children: [
+                   Builder(
+                    builder: (context) {
+                      return FutureBuilder<Uint8List?>(
+                        future: music.getThumbnail(),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.done && snapshot.data != null) {
+                            return Image.memory(snapshot.data!, fit: BoxFit.cover, width: 74, height: 74);
+                          }
+                          if (music.albumArtPath != null) {
+                            return Image.file(
+                              File(music.albumArtPath!),
+                              fit: BoxFit.cover,
+                              width: 74,
+                              height: 74,
+                              errorBuilder: (c, e, s) => _buildPlaceholder(colorScheme),
+                            );
+                          }
+                          return _buildPlaceholder(colorScheme);
+                        },
+                      );
+                    }
+                  ),
+                  if (isCurrent)
+                    Container(
+                      color: colorScheme.primary.withValues(alpha: 0.3),
+                      child: Center(
+                        child: Icon(
+                          isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 32,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  music.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colorScheme.onSurface,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.1,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${music.formattedDuration} • ${music.formattedSize}',
+                  style: TextStyle(
+                    color: colorScheme.onSurface.withValues(alpha: 0.68),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          GestureDetector(
+            onTap: onPlayPause,
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: isCurrent
+                    ? music.themeColor.withValues(alpha: 0.94)
+                    : colorScheme.primaryContainer.withValues(alpha: 0.92),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(
+                isCurrent && isPlaying
+                    ? Icons.pause_rounded
+                    : Icons.play_arrow_rounded,
+                color: isCurrent ? Colors.white : colorScheme.onPrimaryContainer,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlaceholder(ColorScheme colorScheme) {
+    return Container(
+      color: colorScheme.surfaceContainerHigh,
+      child: const Center(child: Icon(Icons.music_note_rounded, size: 32)),
+    );
+  }
 }

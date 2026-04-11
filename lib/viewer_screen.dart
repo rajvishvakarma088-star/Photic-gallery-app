@@ -17,12 +17,14 @@ import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
 import 'services/favorites_database.dart';
 import 'utils/fast_page_scroll_physics.dart';
+import 'providers/settings_provider.dart';
 
 class ViewerScreen extends StatefulWidget {
   final List<AssetEntity> images;
   final int index;
   final ImageProvider? initialPreviewProvider;
   final AssetEntityImageProvider? initialViewerProvider;
+  final SettingsState? settings;
 
   const ViewerScreen({
     super.key,
@@ -30,6 +32,7 @@ class ViewerScreen extends StatefulWidget {
     required this.index,
     this.initialPreviewProvider,
     this.initialViewerProvider,
+    this.settings,
   });
 
   static ThumbnailSize openingThumbnailSize(BuildContext context) {
@@ -943,7 +946,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
       blurSigma: 24,
       borderColor: Colors.white.withValues(alpha: isDark ? 0.15 : 0.25),
       backgroundColor: isDark
-          ? const Color(0xFF161616).withValues(alpha: 0.85)
+          ? (widget.settings?.getBottomBarColor(isDark) ?? const Color(0xFF080808))
+              .withValues(alpha: 0.90)
           : Colors.white.withValues(alpha: 0.9),
       child: Stack(
         children: [

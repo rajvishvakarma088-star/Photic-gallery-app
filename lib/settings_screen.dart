@@ -58,36 +58,45 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isDark = settings.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
+    final topBarColor = settings.getTopBarColor(isDark).withValues(alpha: 0.85);
+
+    final overlayStyle = (isDark
+        ? SystemUiOverlayStyle.light
+        : SystemUiOverlayStyle.dark).copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            systemNavigationBarContrastEnforced: false,
+          );
 
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        leading: Padding(
-          padding: const EdgeInsets.only(left: 12.0),
-          child: Center(
-            child: Material(
-              color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
-              shape: const CircleBorder(),
-              child: IconButton(
-                icon: const Icon(Icons.arrow_back_rounded, size: 22),
-                color: colorScheme.onSurface,
-                onPressed: () => Navigator.pop(context),
-              ),
-            ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, size: 24),
+          color: colorScheme.onSurface,
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(
+          'Settings',
+          style: TextStyle(
+            color: colorScheme.onSurface,
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
           ),
         ),
+        elevation: 0,
+        scrolledUnderElevation: 0,
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
-        elevation: 0,
         flexibleSpace: ClipRect(
           child: BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
             child: Container(
               decoration: BoxDecoration(
-                color: (isDark ? const Color(0xFF080808) : Colors.white)
-                    .withValues(alpha: isDark ? 0.75 : 0.82),
+                color: topBarColor.withValues(alpha: isDark ? 0.75 : 0.82),
                 border: Border(
                   bottom: BorderSide(
                     color: (isDark ? Colors.white : Colors.black)
@@ -99,41 +108,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
         ),
+        systemOverlayStyle: overlayStyle,
       ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: isDark
-                ? const [
-                    Color(0xFF050505),
-                    Color(0xFF080808),
-                    Color(0xFF0C0C0C),
-                  ]
-                : const [
-                    Color(0xFFFFFFFF),
-                    Color(0xFFF9F9F9),
-                    Color(0xFFF0F0F0),
-                  ],
+            colors: settings.getBackgroundGradient(isDark),
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
         ),
         child: SafeArea(
           child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            padding: const EdgeInsets.fromLTRB(20, 104, 20, 32),
             physics: const BouncingScrollPhysics(),
             children: [
-              const SizedBox(height: 16),
-              Text(
-                'Settings',
-                style: TextStyle(
-                  fontSize: 34,
-                  fontWeight: FontWeight.w700,
-                  color: colorScheme.onSurface,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              const SizedBox(height: 24),
               // App Info Card
               Container(
                 padding: const EdgeInsets.all(20),
@@ -144,8 +133,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     end: Alignment.bottomRight,
                     colors: isDark
                         ? [
-                            const Color(0xFF1E1E1E),
-                            const Color(0xFF252525),
+                            settings.amoledMode ? const Color(0xFF0A0A0A) : const Color(0xFF1E1E1E),
+                            settings.amoledMode ? const Color(0xFF121212) : const Color(0xFF252525),
                           ]
                         : [
                             const Color(0xFFFFFFFF),
@@ -282,7 +271,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               // Settings Categories
               Container(
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF171321) : const Color(0xFFF9F7FA),
+                  color: isDark 
+                      ? (settings.amoledMode ? const Color(0xFF080808) : const Color(0xFF171321)) 
+                      : const Color(0xFFF9F7FA),
                   borderRadius: BorderRadius.circular(24),
                 ),
                 child: ListView(

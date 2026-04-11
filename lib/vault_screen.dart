@@ -33,6 +33,10 @@ class _VaultScreenState extends ConsumerState<VaultScreen> with WidgetsBindingOb
   int _selectedTab = 0;
   Set<String> _selectedItemIds = {};
   bool _isSelectionMode = false;
+  final ScrollController _scrollController = ScrollController();
+  bool _hideTopChrome = false;
+  double _lastScrollOffset = 0;
+  final double _scrollThreshold = 20;
 
   List<VaultItem> get _photos => _items
       .where((item) => item.mediaType == VaultMediaType.photo)
@@ -46,13 +50,40 @@ class _VaultScreenState extends ConsumerState<VaultScreen> with WidgetsBindingOb
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(ScreenshotProtectionService.setProtected(true));
+    _scrollController.addListener(_onScroll);
     unawaited(_loadVault());
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    
+    final offset = _scrollController.offset;
+    final delta = offset - _lastScrollOffset;
+    _lastScrollOffset = offset;
+    
+    bool shouldHide;
+    if (_isSelectionMode || offset < _scrollThreshold) {
+      shouldHide = false;
+    } else if (delta > 2) {
+      shouldHide = true;
+    } else if (delta < -2) {
+      shouldHide = false;
+    } else {
+      shouldHide = _hideTopChrome;
+    }
+    
+    if (shouldHide != _hideTopChrome) {
+      setState(() {
+        _hideTopChrome = shouldHide;
+      });
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(vaultService.lock());
+    _scrollController.dispose();
     unawaited(ScreenshotProtectionService.setProtected(false));
     super.dispose();
   }
@@ -507,18 +538,27 @@ class _VaultScreenState extends ConsumerState<VaultScreen> with WidgetsBindingOb
     final settings = ref.watch(settingsProvider);
     final isDark = settings.isDark(context);
     final colorScheme = Theme.of(context).colorScheme;
-    final topBarColor = isDark
-        ? const Color(0xFF0A0A0A)
-        : const Color(0xFFFBFBFB);
+    final topBarColor = settings.getTopBarColor(isDark).withValues(alpha: 0.85);
+    final overlayStyle = (isDark
+        ? SystemUiOverlayStyle.light
+        : SystemUiOverlayStyle.dark).copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarDividerColor: Colors.transparent,
+            systemNavigationBarContrastEnforced: false,
+          );
     final visibleItems = _selectedTab == 0 ? _photos : _videos;
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       backgroundColor: Colors.transparent,
-      appBar: AppBar(
+      appBar: !_hideTopChrome ? AppBar(
         backgroundColor: Colors.transparent,
         title: _isSelectionMode
             ? Text('${_selectedItemIds.length} selected')
             : const Text('Safe Folder'),
+        elevation: 0,
+        scrolledUnderElevation: 0,
         surfaceTintColor: Colors.transparent,
         flexibleSpace: ClipRect(
           child: BackdropFilter(
@@ -537,15 +577,16 @@ class _VaultScreenState extends ConsumerState<VaultScreen> with WidgetsBindingOb
             ),
           ),
         ),
-        systemOverlayStyle:
-            (isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
-                .copyWith(statusBarColor: topBarColor),
+        systemOverlayStyle: overlayStyle,
         leading: _isSelectionMode
             ? IconButton(
-                icon: const Icon(Icons.close),
+                icon: const Icon(Icons.close_rounded),
                 onPressed: _clearSelection,
               )
-            : null,
+            : IconButton(
+                icon: const Icon(Icons.arrow_back_rounded, size: 24),
+                onPressed: () => Navigator.pop(context, _hasChanged),
+              ),
         actions: [
           if (_isSelectionMode)
             IconButton(
@@ -558,25 +599,18 @@ class _VaultScreenState extends ConsumerState<VaultScreen> with WidgetsBindingOb
               tooltip: 'Settings',
               onPressed: _showSettingsSheet,
               icon: const Icon(Icons.settings_outlined),
-            ),
+          ),
         ],
-      ),
+      ) : const PreferredSize(
+          preferredSize: Size.zero,
+          child: SizedBox.shrink(),
+        ),
       body: Stack(
         children: [
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: isDark
-                    ? const [
-                        Color(0xFF050505),
-                        Color(0xFF080808),
-                        Color(0xFF0C0C0C),
-                      ]
-                    : const [
-                        Color(0xFFFFFFFF),
-                        Color(0xFFF9F9F9),
-                        Color(0xFFF0F0F0),
-                      ],
+                colors: settings.getBackgroundGradient(isDark),
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -648,6 +682,7 @@ class _VaultScreenState extends ConsumerState<VaultScreen> with WidgetsBindingOb
                                 ),
                               )
                             : GridView.builder(
+                                controller: _scrollController,
                                 padding: const EdgeInsets.all(10),
                                 physics: const BouncingScrollPhysics(),
                                 itemCount: visibleItems.length,
