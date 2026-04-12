@@ -11,6 +11,7 @@ import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
 import 'services/recycle_bin_database.dart';
 import 'services/vault_service.dart';
+import 'services/thumbnail_disk_cache.dart';
 import 'providers/settings_provider.dart';
 import 'video_viewer_screen.dart';
 import 'viewer_screen.dart';
@@ -40,6 +41,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   final GalleryService service = GalleryService();
   final RecycleBinDatabase recycleBinDatabase = RecycleBinDatabase.instance;
   final VaultService vaultService = VaultService.instance;
+  final ThumbnailDiskCache _thumbDiskCache = ThumbnailDiskCache.instance;
 
   // PageController drives the Photos / Videos tab swipe
   final PageController _pageController = PageController();
@@ -51,7 +53,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   final ScrollController _videoScrollController = ScrollController();
 
   // Shared thumbnail cache keyed by  "${assetId}@${px}"
-  final Map<String, AssetEntityImageProvider> _thumbCache = {};
+  final Map<String, ImageProvider> _thumbCache = {};
 
   // Grid-tile GlobalKeys – prefixed with tab index to avoid duplicate-key
   // errors when the same asset appears in both Photos and Videos tabs.
@@ -96,6 +98,11 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
   // ── Convenience getters ────────────────────────────────────────────────────
   bool get _isPinching => _activePointers >= 2;
   bool get isSelectionMode => selectedAssetIds.isNotEmpty;
+
+  int get effectiveGridCount {
+    if (!mounted) return albumGridCount;
+    return albumGridCount + (MediaQuery.of(context).orientation == Orientation.landscape ? 2 : 0);
+  }
   List<AssetEntity> get visibleAssets =>
       selectedMediaTab == 0 ? albumImages : albumVideos;
 
@@ -188,8 +195,8 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
     // Approximate the grid padding (10 left + 10 right = 20) and spacing
     const spacing = 6.0;
     final contentWidth =
-        viewportWidth - 20 - (albumGridCount - 1) * spacing;
-    final tileExtent = (contentWidth / albumGridCount) + spacing;
+        viewportWidth - 20 - (effectiveGridCount - 1) * spacing;
+    final tileExtent = (contentWidth / effectiveGridCount) + spacing;
 
     final scrollOffset = controller.offset;
     final viewportHeight = controller.position.viewportDimension;
@@ -198,25 +205,72 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
     final visibleRows = (viewportHeight / tileExtent).ceil() + 2;
 
     final startIndex =
-        ((firstRow - 2) * albumGridCount).clamp(0, assets.length);
+        ((firstRow - 2) * effectiveGridCount).clamp(0, assets.length);
     final endIndex =
-        ((firstRow + visibleRows + 4) * albumGridCount).clamp(0, assets.length);
+        ((firstRow + visibleRows + 4) * effectiveGridCount).clamp(0, assets.length);
 
     for (int i = startIndex; i < endIndex; i++) {
       final asset = assets[i];
       final id = '${asset.id}@$_thumbPx';
       if (!_thumbCache.containsKey(id)) {
-        final provider = _thumbCache.putIfAbsent(
-          id,
-          () => AssetEntityImageProvider(
-            asset,
-            isOriginal: false,
-            thumbnailSize: const ThumbnailSize.square(_thumbPx),
-            thumbnailFormat: ThumbnailFormat.jpeg,
-          ),
-        );
-        if (_thumbCache.length > _maxThumbCacheEntries) {
-          _thumbCache.remove(_thumbCache.keys.first);
+        ImageProvider? provider;
+
+        if (_thumbDiskCache.isReady) {
+
+          final cachedFile = _thumbDiskCache.cachedFileSync(asset.id, _thumbPx);
+
+          if (cachedFile != null) provider = FileImage(cachedFile);
+
+        }
+
+        if (provider == null) {
+
+
+          provider = _thumbCache.remove(id);
+
+
+          if (provider != null) {
+
+
+            _thumbCache[id] = provider;
+
+
+          } else {
+
+
+            provider = AssetEntityImageProvider(
+
+
+              asset,
+
+
+              isOriginal: false,
+
+
+              thumbnailSize: const ThumbnailSize.square(_thumbPx),
+
+
+              thumbnailFormat: ThumbnailFormat.jpeg,
+
+
+            );
+
+
+            _thumbCache[id] = provider;
+
+
+            if (_thumbCache.length > _maxThumbCacheEntries) {
+
+
+              _thumbCache.remove(_thumbCache.keys.first);
+
+
+            }
+
+
+          }
+
+
         }
         unawaited(precacheImage(provider, context));
       }
@@ -390,17 +444,85 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
       return placeholder;
     }
 
-    final provider = _thumbCache.putIfAbsent(
-      id,
-      () => AssetEntityImageProvider(
-        asset,
-        isOriginal: false,
-        thumbnailSize: ThumbnailSize.square(size),
-        thumbnailFormat: ThumbnailFormat.jpeg,
-      ),
-    );
-    if (_thumbCache.length > _maxThumbCacheEntries) {
-      _thumbCache.remove(_thumbCache.keys.first);
+    ImageProvider? provider;
+
+
+    if (_thumbDiskCache.isReady) {
+
+
+      final cachedFile = _thumbDiskCache.cachedFileSync(asset.id, size);
+
+
+      if (cachedFile != null) provider = FileImage(cachedFile);
+
+
+    }
+
+
+    if (provider == null) {
+
+
+
+      provider = _thumbCache.remove(id);
+
+
+
+      if (provider != null) {
+
+
+
+        _thumbCache[id] = provider;
+
+
+
+      } else {
+
+
+
+        provider = AssetEntityImageProvider(
+
+
+
+          asset,
+
+
+
+          isOriginal: false,
+
+
+
+          thumbnailSize: ThumbnailSize.square(size),
+
+
+
+          thumbnailFormat: ThumbnailFormat.jpeg,
+
+
+
+        );
+
+
+
+        _thumbCache[id] = provider;
+
+
+
+        if (_thumbCache.length > _maxThumbCacheEntries) {
+
+
+
+          _thumbCache.remove(_thumbCache.keys.first);
+
+
+
+        }
+
+
+
+      }
+
+
+
     }
     return Image(
       image: provider,
@@ -762,7 +884,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
           ? const NeverScrollableScrollPhysics()
           : const BouncingScrollPhysics(),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: albumGridCount,
+        crossAxisCount: effectiveGridCount,
         mainAxisSpacing: 6,
         crossAxisSpacing: 6,
         childAspectRatio: 1,

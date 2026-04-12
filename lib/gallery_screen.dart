@@ -139,6 +139,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   bool get _isPinching => _activePointers >= 2;
   bool get isSelectionMode => selectedAssetIds.isNotEmpty;
 
+  int get effectiveGridCount {
+    if (!mounted) return galleryGridCount;
+    return galleryGridCount + (MediaQuery.of(context).orientation == Orientation.landscape ? 2 : 0);
+  }
+
   int get galleryThumbPx {
     // Keep one stable thumbnail size across grid changes so pinch-to-zoom
     // reuses the same cached providers instead of triggering a full reload.
@@ -2508,7 +2513,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     final viewportWidth = MediaQuery.of(context).size.width;
     final contentWidth = (viewportWidth - 20 - ((galleryGridCount - 1) * 6))
         .clamp(120.0, 4000.0);
-    final tileExtent = (contentWidth / galleryGridCount) + 6;
+    final tileExtent = (contentWidth / effectiveGridCount) + 6;
     final effectiveOffset = (activeController.offset - 54).clamp(
       0.0,
       double.infinity,
@@ -2517,11 +2522,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     final visibleRows =
         ((activeController.position.viewportDimension / tileExtent).ceil() + 2)
             .clamp(4, 14);
-    final startIndex = ((firstVisibleRow - 4) * galleryGridCount).clamp(
+    final startIndex = ((firstVisibleRow - 4) * effectiveGridCount).clamp(
       0,
       activeImages.length,
     );
-    final endIndex = ((firstVisibleRow + visibleRows + 7) * galleryGridCount)
+    final endIndex = ((firstVisibleRow + visibleRows + 7) * effectiveGridCount)
         .clamp(0, activeImages.length);
 
     if (startIndex == _lastWarmedStart && endIndex == _lastWarmedEnd) return;
@@ -3316,7 +3321,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
               return buildGridTile(asset, visibleImages, absoluteIndex, settings);
             }, childCount: sections[sectionIndex].items.length),
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: galleryGridCount,
+              crossAxisCount: effectiveGridCount,
               mainAxisSpacing: 4,
               crossAxisSpacing: 4,
               childAspectRatio: 1,

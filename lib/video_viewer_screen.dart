@@ -40,6 +40,8 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
   bool isFavorite = false;
   bool hideViewerChrome = false;
   bool showViewerChrome = true;
+  bool isLocked = false;
+  DeviceOrientation? _currentOrientation;
   Brightness? _lastAppliedBrightness;
 
   @override
@@ -48,6 +50,8 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
     currentIndex = widget.initialIndex;
     pageController = PageController(initialPage: widget.initialIndex);
     _loadFavoriteStatus();
+    // Start by allowing all orientations (Auto-Rotate)
+    SystemChrome.setPreferredOrientations([]);
   }
 
   Future<void> _loadFavoriteStatus() async {
@@ -61,10 +65,61 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
 
   @override
   void dispose() {
+    // Restore all orientations on exit
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     verticalDragNotifier.dispose();
     pageController.dispose();
     super.dispose();
+  }
+
+  void _toggleRotationManually() {
+    if (isLocked) return;
+    HapticFeedback.mediumImpact();
+
+    // Ensure state is fresh from MediaQuery if not already set
+    final currentPhysical = MediaQuery.of(context).orientation;
+    if (_currentOrientation == null) {
+      _currentOrientation = currentPhysical == Orientation.landscape 
+          ? DeviceOrientation.landscapeLeft 
+          : DeviceOrientation.portraitUp;
+    }
+
+    // Toggle logic
+    if (_currentOrientation == DeviceOrientation.portraitUp) {
+      _currentOrientation = DeviceOrientation.landscapeLeft;
+    } else {
+      _currentOrientation = DeviceOrientation.portraitUp;
+    }
+
+    // Apply with a micro-delay for better reliability across different device states
+    Future.microtask(() {
+      if (_currentOrientation == DeviceOrientation.landscapeLeft) {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]);
+      } else {
+        SystemChrome.setPreferredOrientations([]); // Restores continuous system auto-rotation seamlessly
+      }
+    });
+  }
+
+  void _toggleLock() {
+    setState(() {
+      isLocked = !isLocked;
+      if (isLocked) {
+        showViewerChrome = false;
+      } else {
+        showViewerChrome = true;
+      }
+    });
+    HapticFeedback.heavyImpact();
   }
 
   void _applySystemUiStyle(Brightness brightness) {
@@ -771,6 +826,21 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+    final orientation = mediaQuery.orientation;
+    
+    // Auto-sync internal state with physical device orientation
+    // This ensures the manual toggle always knows the current physical state
+    final physicalOrientation = orientation == Orientation.landscape 
+        ? DeviceOrientation.landscapeLeft 
+        : DeviceOrientation.portraitUp;
+        
+    if (_currentOrientation != physicalOrientation) {
+      // Check if we were NOT in a forced mode that matches the new physical state
+      // This allows the manual toggle to "reset" its starting point when the user rotates physically
+      _currentOrientation = physicalOrientation;
+    }
+
     final brightness = Theme.of(context).brightness;
     _applySystemUiStyle(brightness);
     final isDark = brightness == Brightness.dark;
@@ -795,12 +865,17 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () {
+              if (isLocked) return;
               setState(() {
                 showViewerChrome = !showViewerChrome;
               });
             },
-            onLongPress: () => showContextMenu(isDark),
+            onLongPress: () {
+              if (isLocked) return;
+              showContextMenu(isDark);
+            },
             onVerticalDragUpdate: (details) {
+              if (isLocked) return;
               final newDrag = verticalDragNotifier.value + details.delta.dy;
               if (newDrag > 0) {
                 verticalDragNotifier.value =
@@ -809,6 +884,10 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
               }
             },
             onVerticalDragEnd: (details) {
+              if (isLocked) {
+                verticalDragNotifier.value = 0;
+                return;
+              }
               final velocity = details.primaryVelocity ?? 0;
               final verticalDrag = verticalDragNotifier.value;
 
@@ -855,12 +934,15 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                               child: _VideoPage(
                                 asset: asset,
                                 immersiveMode: hideViewerChrome,
+                                isLocked: isLocked, // Pass lock state
                                 onSurfaceTap: () {
-                                  if (!mounted) return;
+                                  if (!mounted || isLocked) return; // Prevent toggle when locked
                                   setState(() {
                                     showViewerChrome = !showViewerChrome;
                                   });
                                 },
+                                onLockToggle: _toggleLock, // Pass lock toggle
+                                onRotateToggle: _toggleRotationManually, // Pass rotate toggle
                                 onControllerReady: (controller) {
                                   _videoControllers[idx] = controller;
                                   if (idx == currentIndex && mounted) {
@@ -879,114 +961,180 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
             ),
           ),
 
-          if (!hideViewerChrome && showViewerChrome)
-            Positioned(
-              top: 50,
-              left: 20,
-              child: ValueListenableBuilder<double>(
-                valueListenable: verticalDragNotifier,
-                builder: (context, drag, child) {
-                  return AnimatedOpacity(
-                    duration: const Duration(milliseconds: 100),
-                    opacity: drag > 20 ? 0 : 1.0,
-                    child: child,
-                  );
-                },
-                child: GlassContainer(
-                  borderRadius: BorderRadius.circular(22),
-                  blurSigma: 16,
-                  child: SizedBox(
-                    width: 50,
-                    height: 50,
-                    child: IconButton(
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
-                      onPressed: () => Navigator.pop(context),
+          // 🔙 BACK BUTTON
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOutExpo,
+            top: !hideViewerChrome && showViewerChrome && !isLocked ? 50 : -60,
+            left: 20,
+            child: ValueListenableBuilder<double>(
+              valueListenable: verticalDragNotifier,
+              builder: (context, drag, child) {
+                return AnimatedOpacity(
+                  duration: const Duration(milliseconds: 100),
+                  opacity: drag > 20 ? 0 : 1.0,
+                  child: child,
+                );
+              },
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(22),
+                blurSigma: 16,
+                child: SizedBox(
+                  width: 50,
+                  height: 50,
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // ⚙️ MORE BUTTON
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOutExpo,
+            top: !hideViewerChrome && showViewerChrome && !isLocked ? 50 : -60,
+            right: 20,
+            child: ValueListenableBuilder<double>(
+              valueListenable: verticalDragNotifier,
+              builder: (context, drag, child) {
+                return AnimatedOpacity(
+                  duration: const Duration(milliseconds: 100),
+                  opacity: drag > 20 ? 0 : 1.0,
+                  child: child,
+                );
+              },
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(22),
+                blurSigma: 16,
+                child: SizedBox(
+                  width: 50,
+                  height: 50,
+                  child: IconButton(
+                    icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
+                    onPressed: () => showContextMenu(isDark),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // ⚡ QUICK ACTION BAR
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOutExpo,
+            bottom: !hideViewerChrome && showViewerChrome && !isLocked
+                ? (2 + MediaQuery.of(context).padding.bottom)
+                : -100,
+            left: 16,
+            right: 16,
+            child: ValueListenableBuilder<double>(
+              valueListenable: verticalDragNotifier,
+              builder: (context, drag, child) {
+                return AnimatedOpacity(
+                  duration: const Duration(milliseconds: 100),
+                  opacity: drag > 20 ? 0 : 1.0,
+                  child: child,
+                );
+              },
+              child: buildQuickActionBar(isDark),
+            ),
+          ),
+
+          // 📺 IMMERSIVE MODE TOGGLE (Floating Exit)
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOutExpo,
+            top: hideViewerChrome && showViewerChrome && !isLocked ? 50 : -60,
+            right: 20,
+            child: ValueListenableBuilder<double>(
+              valueListenable: verticalDragNotifier,
+              builder: (context, drag, child) {
+                return AnimatedOpacity(
+                  duration: const Duration(milliseconds: 100),
+                  opacity: drag > 20 ? 0 : 1.0,
+                  child: child,
+                );
+              },
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(22),
+                blurSigma: 16,
+                child: SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: IconButton(
+                    tooltip: 'Exit full screen',
+                    icon: const Icon(Icons.fullscreen_exit_rounded, color: Colors.white),
+                    onPressed: _toggleImmersivePlayback,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // 🔒 DYNAMIC PERSISTENT LOCK BUTTON (Consolidated)
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeOutBack,
+            // Visible if controls are shown OR if locked (to allow unlocking)
+            right: (showViewerChrome || isLocked) && !hideViewerChrome ? 20 : -80,
+            bottom: 110 + MediaQuery.of(context).padding.bottom + 60,
+            child: GestureDetector(
+              onTap: () {
+                HapticFeedback.mediumImpact();
+                _toggleLock();
+              },
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(24),
+                blurSigma: 18,
+                backgroundColor: isLocked 
+                    ? Colors.black.withValues(alpha: 0.75) 
+                    : Colors.black.withValues(alpha: 0.35),
+                child: Padding(
+                  padding: EdgeInsets.all(isLocked ? 14 : 12),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    child: Icon(
+                      isLocked ? Icons.lock_rounded : Icons.lock_open_rounded,
+                      key: ValueKey(isLocked),
+                      color: isLocked ? const Color(0xFFDCCFFF) : Colors.white,
+                      size: isLocked ? 26 : 24,
                     ),
                   ),
                 ),
               ),
             ),
+          ),
 
-          if (!hideViewerChrome && showViewerChrome)
-            Positioned(
-              top: 50,
-              right: 20,
-              child: ValueListenableBuilder<double>(
-                valueListenable: verticalDragNotifier,
-                builder: (context, drag, child) {
-                  return AnimatedOpacity(
-                    duration: const Duration(milliseconds: 100),
-                    opacity: drag > 20 ? 0 : 1.0,
-                    child: child,
-                  );
-                },
-                child: GlassContainer(
-                  borderRadius: BorderRadius.circular(22),
-                  blurSigma: 16,
-                  child: SizedBox(
-                    width: 50,
-                    height: 50,
-                    child: IconButton(
-                      icon: const Icon(
-                        Icons.more_vert_rounded,
-                        color: Colors.white,
-                      ),
-                      onPressed: () => showContextMenu(isDark),
-                    ),
+          // 🔄 PERSISTENT ROTATION BUTTON
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeOutBack,
+            // Visible ONLY when controls are shown and NOT locked
+            right: showViewerChrome && !isLocked && !hideViewerChrome ? 20 : -80,
+            bottom: 110 + MediaQuery.of(context).padding.bottom + 60 + 72,
+            child: GestureDetector(
+              onTap: () {
+                HapticFeedback.mediumImpact();
+                _toggleRotationManually();
+              },
+              child: GlassContainer(
+                borderRadius: BorderRadius.circular(24),
+                blurSigma: 18,
+                backgroundColor: Colors.black.withValues(alpha: 0.35),
+                child: const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Icon(
+                    Icons.screen_rotation_rounded,
+                    color: Colors.white,
+                    size: 24,
                   ),
                 ),
               ),
             ),
-
-          if (!hideViewerChrome && showViewerChrome)
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 2 + MediaQuery.of(context).padding.bottom,
-              child: ValueListenableBuilder<double>(
-                valueListenable: verticalDragNotifier,
-                builder: (context, drag, child) {
-                  return AnimatedOpacity(
-                    duration: const Duration(milliseconds: 100),
-                    opacity: drag > 20 ? 0 : 1.0,
-                    child: child,
-                  );
-                },
-                child: buildQuickActionBar(isDark),
-              ),
-            ),
-
-          if (hideViewerChrome && showViewerChrome)
-            Positioned(
-              top: 50,
-              right: 20,
-              child: ValueListenableBuilder<double>(
-                valueListenable: verticalDragNotifier,
-                builder: (context, drag, child) {
-                  return AnimatedOpacity(
-                    duration: const Duration(milliseconds: 100),
-                    opacity: drag > 20 ? 0 : 1.0,
-                    child: child,
-                  );
-                },
-                child: GlassContainer(
-                  borderRadius: BorderRadius.circular(22),
-                  blurSigma: 16,
-                  child: SizedBox(
-                    width: 52,
-                    height: 52,
-                    child: IconButton(
-                      tooltip: 'Exit full screen',
-                      icon: const Icon(
-                        Icons.fullscreen_exit_rounded,
-                        color: Colors.white,
-                      ),
-                      onPressed: _toggleImmersivePlayback,
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          ),
         ],
       ),
     );
@@ -996,13 +1144,19 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
 class _VideoPage extends StatefulWidget {
   final AssetEntity asset;
   final bool immersiveMode;
+  final bool isLocked;
   final VoidCallback? onSurfaceTap;
+  final VoidCallback onLockToggle;
+  final VoidCallback onRotateToggle;
   final ValueChanged<VideoPlayerController> onControllerReady;
 
   const _VideoPage({
     required this.asset,
     required this.immersiveMode,
+    required this.isLocked,
     required this.onSurfaceTap,
+    required this.onLockToggle,
+    required this.onRotateToggle,
     required this.onControllerReady,
   });
 
@@ -1038,7 +1192,10 @@ class _VideoPageState extends State<_VideoPage> {
       allowFullScreen: false,
       customControls: PremiumVideoControls(
         immersiveMode: widget.immersiveMode,
+        isLocked: widget.isLocked,
         onSurfaceTap: widget.onSurfaceTap,
+        onLockToggle: widget.onLockToggle,
+        onRotateToggle: widget.onRotateToggle,
       ),
       errorBuilder: (context, errorMessage) {
         return Center(
@@ -1080,12 +1237,18 @@ class _VideoPageState extends State<_VideoPage> {
 
 class PremiumVideoControls extends StatefulWidget {
   final bool immersiveMode;
+  final bool isLocked;
   final VoidCallback? onSurfaceTap;
+  final VoidCallback onLockToggle;
+  final VoidCallback onRotateToggle;
 
   const PremiumVideoControls({
     super.key,
     required this.immersiveMode,
+    required this.isLocked,
     required this.onSurfaceTap,
+    required this.onLockToggle,
+    required this.onRotateToggle,
   });
 
   @override
@@ -1126,6 +1289,7 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
   }
 
   void _toggleControls() {
+    if (widget.isLocked) return;
     setState(() => _showControls = !_showControls);
     if (_showControls) _startHideTimer();
     widget.onSurfaceTap?.call();
@@ -1147,6 +1311,18 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
   @override
   Widget build(BuildContext context) {
     if (!_controller.value.isInitialized) return const SizedBox();
+    
+    // STRICT LOCK: Hide all internal playback controls if locked
+    if (widget.isLocked) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          // You could add a subtle haptic feedback here to show it's locked
+          HapticFeedback.selectionClick();
+        },
+        child: const SizedBox.expand(),
+      );
+    }
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -1158,6 +1334,7 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
           color: Colors.black26,
           child: Stack(
             children: [
+              // Playback controls (Center)
               Positioned.fill(
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -1207,6 +1384,12 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
                   ],
                 ),
               ),
+
+              Positioned(
+                right: 20,
+                bottom: 110 + MediaQuery.of(context).padding.bottom + 60,
+                child: const SizedBox.shrink(),
+              ),
               // Lifted Progress Bar
               Positioned(
                 left: 20,
@@ -1252,6 +1435,23 @@ class _PremiumVideoControlsState extends State<PremiumVideoControls> {
             ],
           ),
         ),
+      ),
+    );
+  }
+  Widget _sidebarButton({required IconData icon, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap();
+      },
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.black45,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white12, width: 1),
+        ),
+        child: Icon(icon, color: Colors.white70, size: 24),
       ),
     );
   }
