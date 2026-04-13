@@ -93,7 +93,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
   bool isFavorite = false;
   Brightness? _lastAppliedBrightness;
 
-  final PhotoViewController photoController = PhotoViewController();
+  bool _isCurrentlyZoomed = false;
+
   static const double detailsSheetHeight = 316;
   static const double thumbnailItemWidth = 52;
   static const double thumbnailSpacing = 8;
@@ -113,15 +114,43 @@ class _ViewerScreenState extends State<ViewerScreen> {
       return previewProvider;
     }
 
+    // Two-stage loading: If the 4K version hasn't finished precaching yet,
+    // immediately show the low-res 240px image to prevent any blank screens.
+    // It will seamlessly enhance to 4K once precaching completes and setState fires.
+    if (!highQualityReadyAssetIds.contains(asset.id)) {
+      return stripImageProvider(asset);
+    }
+
     return viewerImageProvider(asset);
   }
 
   AssetEntityImageProvider viewerImageProvider(AssetEntity asset) {
     return providerCache.putIfAbsent(asset.id, () {
+      int width = asset.width;
+      int height = asset.height;
+
+      // Fallbacks in case metadata hasn't loaded properly
+      if (width <= 0) width = 1920;
+      if (height <= 0) height = 1080;
+
+      // Cap at 4096 to keep maximum pristine screen-visible quality for HEVC files.
+      // Flutter's ImageCache allows us to hold these because we successfully 
+      // override maximumSizeBytes to 500MB heavily down in initState().
+      const int maxDim = 4096;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = (height * maxDim / width).round();
+          width = maxDim;
+        } else {
+          width = (width * maxDim / height).round();
+          height = maxDim;
+        }
+      }
+
       return AssetEntityImageProvider(
         asset,
-        isOriginal: false,
-        thumbnailSize: const ThumbnailSize(800, 800),
+        isOriginal: false, // Essential to prevent HEVC decoding lag in Flutter itself
+        thumbnailSize: ThumbnailSize(width, height),
         thumbnailFormat: ThumbnailFormat.jpeg,
       );
     });
@@ -132,7 +161,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
       return AssetEntityImageProvider(
         asset,
         isOriginal: false,
-        thumbnailSize: const ThumbnailSize(240, 240),
+        thumbnailSize: const ThumbnailSize.square(150),
         thumbnailFormat: ThumbnailFormat.jpeg,
       );
     });
@@ -160,10 +189,33 @@ class _ViewerScreenState extends State<ViewerScreen> {
   void warmCurrentThenNeighbors(int centerIndex) {
     precacheViewerImage(centerIndex);
     deferredNeighborWarmupTimer?.cancel();
+
+    // 🧹 Aggressive Sliding Window RAM Management
+    // Safely evict decoded 4K heavy images mathematically situated further than 
+    // 3 steps away from your current position, halting explosive OOM RAM climbing. 
+    for (final id in providerCache.keys.toList()) {
+      bool isWithinWindow = false;
+      for (int i = centerIndex - 3; i <= centerIndex + 3; i++) {
+        if (i >= 0 && i < widget.images.length && widget.images[i].id == id) {
+          isWithinWindow = true;
+          break;
+        }
+      }
+      if (!isWithinWindow) {
+        final provider = providerCache.remove(id);
+        provider?.evict(); 
+        warmedViewerAssetIds.remove(id);
+        highQualityReadyAssetIds.remove(id);
+      }
+    }
+
     deferredNeighborWarmupTimer = Timer(const Duration(milliseconds: 120), () {
       if (!mounted) return;
+      // Preload the next 2 images magically in both directions identically to Apple Gallery
       precacheViewerImage(centerIndex - 1);
       precacheViewerImage(centerIndex + 1);
+      precacheViewerImage(centerIndex - 2);
+      precacheViewerImage(centerIndex + 2);
     });
   }
 
@@ -305,8 +357,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
     try {
       await controller.animateToPage(
         index,
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOutCubic,
+        duration: const Duration(milliseconds: 110),
+        curve: Curves.easeOut,
       );
     } finally {
       _isPageSwipeAnimating = false;
@@ -314,8 +366,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   bool get _isViewerZoomed {
-    final scale = photoController.scale ?? 1.0;
-    return scale > 1.02;
+    return _isCurrentlyZoomed;
   }
 
   void _resetHorizontalSwipeTracking({int? pointer}) {
@@ -377,15 +428,19 @@ class _ViewerScreenState extends State<ViewerScreen> {
     final velocityX = dx / safeElapsedMs;
     final movedHorizontally = dx.abs() > 26;
     final fastHorizontalFling = velocityX.abs() > 0.42;
-    final isHorizontalIntent = dx.abs() > (dy.abs() * 1.2);
-    final pageStayedMostlyStill =
+    final isHorizontalIntent = dx.abs() > (dy.abs() * 1.5); // Stricter horizontal definition so it doesn't fight native diagonal PageView panning
+
+    // If native PageView successfully grabbed the gesture and moved the image smoothly 
+    // with your finger (as it does natively), we should absolutely NEVER override it
+    // with a rigid `animateToPage` here. We only override if it froze completely dead.
+    final pageStayedCompletelyStill =
         startPage == null ||
         !controller.hasClients ||
-        ((controller.page ?? currentIndex.toDouble()) - startPage).abs() < 0.08;
+        ((controller.page ?? currentIndex.toDouble()) - startPage).abs() < 0.02;
 
     if ((!movedHorizontally && !fastHorizontalFling) ||
         !isHorizontalIntent ||
-        !pageStayedMostlyStill) {
+        !pageStayedCompletelyStill) {
       return;
     }
 
@@ -434,13 +489,17 @@ class _ViewerScreenState extends State<ViewerScreen> {
   @override
   void initState() {
     super.initState();
+    // Expand the global ImageCache limit from 100MB to 500MB explicitly to 
+    // safely hold our pristine 4096px HEVC 4K images without aggressively 
+    // evicting the background grid screen thumbnails!
+    PaintingBinding.instance.imageCache.maximumSizeBytes = 1024 * 1024 * 500;
+
     currentIndex = widget.index;
     currentIndexNotifier.value = widget.index;
     controller = PageController(initialPage: widget.index);
-    final initialViewerProvider = widget.initialViewerProvider;
-    if (initialViewerProvider != null) {
-      providerCache[widget.images[widget.index].id] = initialViewerProvider;
-    }
+    // Removed caching `initialViewerProvider` (800x800) into `providerCache`
+    // so the initial image eventually upgrades to the high-resolution provider.
+
     scheduleMicrotask(() async {
       if (!mounted) return;
       precacheViewerImage(currentIndex);
@@ -470,7 +529,6 @@ class _ViewerScreenState extends State<ViewerScreen> {
   void dispose() {
     thumbnailStripTimer?.cancel();
     deferredNeighborWarmupTimer?.cancel();
-    photoController.dispose();
     thumbnailScrollController.dispose();
     currentIndexNotifier.dispose();
     verticalDragNotifier.dispose();
@@ -539,6 +597,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                     GestureDetector(
                       onLongPress: () => showContextMenu(isDark),
                       onVerticalDragUpdate: (details) {
+                        if (_isViewerZoomed) return;
                         if (details.delta.dy < 0 && !showDetails) {
                           upwardDragNotifier.value =
                               (upwardDragNotifier.value + (-details.delta.dy))
@@ -556,6 +615,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                         }
                       },
                       onVerticalDragEnd: (details) {
+                        if (_isViewerZoomed) return;
                         final velocity = details.primaryVelocity ?? 0;
                         final verticalDrag = verticalDragNotifier.value;
                         final upwardDrag = upwardDragNotifier.value;
@@ -602,16 +662,17 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                       ),
                                       child: PhotoViewGallery.builder(
                                         pageController: controller,
-                                        scrollPhysics:
-                                            const FastPageScrollPhysics(
-                                              parent: BouncingScrollPhysics(),
-                                            ),
+                                        scrollPhysics: const BouncingScrollPhysics(),
                                         itemCount: widget.images.length,
                                         backgroundDecoration:
                                             const BoxDecoration(
                                               color: Colors.transparent,
                                             ),
+                                        scaleStateChangedCallback: (scaleState) {
+                                          _isCurrentlyZoomed = scaleState != PhotoViewScaleState.initial;
+                                        },
                                         onPageChanged: (index) async {
+                                          _isCurrentlyZoomed = false;
                                           currentIndex = index;
                                           currentIndexNotifier.value = index;
                                           warmCurrentThenNeighbors(index);
@@ -641,7 +702,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                           _swipeJustHappened = true;
                                           _swipeDebounceTimer?.cancel();
                                           _swipeDebounceTimer = Timer(
-                                            const Duration(milliseconds: 350),
+                                            const Duration(milliseconds: 120),
                                             () => _swipeJustHappened = false,
                                           );
                                         },
@@ -650,7 +711,6 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                         builder: (context, index) {
                                           final asset = widget.images[index];
                                           return PhotoViewGalleryPageOptions(
-                                            controller: photoController,
                                             imageProvider:
                                                 currentPageImageProvider(
                                                   asset,
@@ -860,27 +920,29 @@ class _ViewerScreenState extends State<ViewerScreen> {
                 }
                 return false;
               },
-              child: ListView.separated(
+              child: ListView.builder(
                 controller: thumbnailScrollController,
                 padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                 scrollDirection: Axis.horizontal,
                 physics: const BouncingScrollPhysics(),
                 itemCount: widget.images.length,
-                separatorBuilder: (_, __) =>
-                    const SizedBox(width: thumbnailSpacing),
+                itemExtent: thumbnailItemWidth + thumbnailSpacing, // HUGE layout optimization!
                 itemBuilder: (context, index) {
                   final asset = widget.images[index];
                   final isSelected = index == currentIndex;
 
-                  return GestureDetector(
-                    onTapDown: (_) => _beginThumbnailStripInteraction(),
-                    onTapCancel: _endThumbnailStripInteraction,
-                    onTap: () {
-                      showThumbnailStripTemporarily();
-                      animateToViewerPage(index);
-                      _endThumbnailStripInteraction();
-                    },
-                    child: AnimatedContainer(
+                  return Container(
+                    padding: const EdgeInsets.only(right: thumbnailSpacing),
+                    alignment: Alignment.centerLeft,
+                    child: GestureDetector(
+                      onTapDown: (_) => _beginThumbnailStripInteraction(),
+                      onTapCancel: _endThumbnailStripInteraction,
+                      onTap: () {
+                        showThumbnailStripTemporarily();
+                        animateToViewerPage(index);
+                        _endThumbnailStripInteraction();
+                      },
+                      child: AnimatedContainer(
                       duration: const Duration(milliseconds: 220),
                       curve: Curves.easeOutCubic,
                       width: thumbnailItemWidth,
@@ -910,6 +972,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                                 image: stripImageProvider(asset),
                                 fit: BoxFit.cover,
                                 gaplessPlayback: true,
+                                filterQuality: FilterQuality.low,
                               ),
                               if (isSelected)
                                 DecoratedBox(
@@ -929,6 +992,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                           ),
                         ),
                       ),
+                    ),
                     ),
                   );
                 },

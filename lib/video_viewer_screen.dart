@@ -105,7 +105,9 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
           DeviceOrientation.landscapeRight,
         ]);
       } else {
-        SystemChrome.setPreferredOrientations([]); // Restores continuous system auto-rotation seamlessly
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+        ]);
       }
     });
   }
