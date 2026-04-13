@@ -1444,8 +1444,27 @@ class _ViewerScreenState extends State<ViewerScreen> {
     }
   }
 
+  Future<void> _setWallpaperWithIntent() async {
+    final asset = _currentAsset;
+    final assetTypeInt = asset.type == AssetType.video
+        ? 2
+        : asset.type == AssetType.audio
+        ? 3
+        : 1;
+
+    try {
+      await _wallpaperChannel.invokeMethod('setWallpaperWithIntent', {
+        'assetId': asset.id,
+        'assetType': assetTypeInt,
+      });
+    } catch (e) {
+      if (mounted) _showViewerSnackBar('Failed to open wallpaper chooser');
+    }
+  }
+
   Future<void> _showSetAsSheet(bool isDark) async {
-    final color = isDark ? Colors.white : Colors.black87;
+    final colorScheme = Theme.of(context).colorScheme;
+    final color = colorScheme.onSurface;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -1455,7 +1474,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
         return _buildAnimatedSheet(
           child: GlassContainer(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(34)),
-            blurSigma: 20,
+            blurSigma: 24,
+            backgroundColor: colorScheme.surface.withValues(alpha: 0.88),
             child: SafeArea(
               top: false,
               child: SingleChildScrollView(
@@ -1523,11 +1543,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
                       _buildMenuTile(
                         isDark: isDark,
                         icon: Icons.open_in_new_rounded,
-                        title: 'Open With Another App',
-                        subtitle: 'Use in contacts, social apps, etc.',
+                        title: 'Use Another App',
+                        subtitle: 'Set using WhatsApp, Contacts, or Photos...',
                         onTap: () async {
                           Navigator.pop(sheetContext);
-                          await openWithAnotherApp();
+                          await _setWallpaperWithIntent();
                         },
                       ),
                     ],
@@ -1652,8 +1672,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   void showContextMenu(bool isDark) {
-    final textColor = isDark ? Colors.white : const Color(0xFF211A33);
     final colorScheme = Theme.of(context).colorScheme;
+    final textColor = colorScheme.onSurface;
 
     showGeneralDialog(
       context: context,
@@ -1687,7 +1707,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
               right: 20,
               child: GlassContainer(
                 borderRadius: BorderRadius.circular(26),
-                blurSigma: 22,
+                blurSigma: 24,
+                backgroundColor: colorScheme.surface.withValues(alpha: 0.88),
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 260),
                   child: Material(
@@ -1858,14 +1879,16 @@ class _ViewerScreenState extends State<ViewerScreen> {
     required VoidCallback onTap,
     bool destructive = false,
   }) {
+    final colorScheme = Theme.of(context).colorScheme;
     final textColor = destructive
-        ? const Color(0xFFE65A66)
-        : (isDark ? Colors.white : const Color(0xFF211A33));
+        ? colorScheme.error
+        : colorScheme.onSurface;
     final iconBg = destructive
-        ? const Color(0xFFE65A66).withValues(alpha: 0.12)
-        : (isDark
-              ? Colors.white.withValues(alpha: 0.1)
-              : Colors.white.withValues(alpha: 0.48));
+        ? colorScheme.errorContainer
+        : colorScheme.primaryContainer;
+    final iconColor = destructive
+        ? colorScheme.onErrorContainer
+        : colorScheme.onPrimaryContainer;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),

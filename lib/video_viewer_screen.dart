@@ -290,7 +290,8 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
   }
 
   void showContextMenu(bool isDark) {
-    final textColor = isDark ? Colors.white : const Color(0xFF221B34);
+    final colorScheme = Theme.of(context).colorScheme;
+    final textColor = colorScheme.onSurface;
 
     showGeneralDialog(
       context: context,
@@ -324,7 +325,8 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
               right: 20,
               child: GlassContainer(
                 borderRadius: BorderRadius.circular(26),
-                blurSigma: 22,
+                blurSigma: 24,
+                backgroundColor: colorScheme.surface.withValues(alpha: 0.88),
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 250),
                   child: Material(
@@ -673,8 +675,8 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _actionIcon(Icons.share_rounded, isDark, shareAsset),
-                _actionIcon(Icons.edit_rounded, isDark, () {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Video Editor Coming Soon'), behavior: SnackBarBehavior.floating));
+                _actionIcon(Icons.speed_rounded, isDark, () {
+                  _showPlaybackSpeedSheet(isDark);
                 }),
                 _actionIcon(
                   isFavorite
@@ -684,9 +686,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                   toggleFavorite,
                   color: isFavorite ? const Color(0xFFE66A74) : null,
                 ),
-                _actionIcon(Icons.info_outline_rounded, isDark, () {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Video Info Coming Soon'), behavior: SnackBarBehavior.floating));
-                }),
+                _actionIcon(Icons.visibility_off_rounded, isDark, hideAsset),
                 _actionIcon(Icons.delete_outline_rounded, isDark, deleteAsset),
               ],
             ),
@@ -721,14 +721,16 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
     required VoidCallback onTap,
     bool destructive = false,
   }) {
+    final colorScheme = Theme.of(context).colorScheme;
     final textColor = destructive
-        ? const Color(0xFFE65A66)
-        : (isDark ? Colors.white : const Color(0xFF211A33));
+        ? colorScheme.error
+        : colorScheme.onSurface;
     final iconBg = destructive
-        ? const Color(0xFFE65A66).withValues(alpha: 0.12)
-        : (isDark
-              ? Colors.white.withValues(alpha: 0.1)
-              : Colors.white.withValues(alpha: 0.48));
+        ? colorScheme.errorContainer
+        : colorScheme.primaryContainer;
+    final iconColor = destructive
+        ? colorScheme.onErrorContainer
+        : colorScheme.onPrimaryContainer;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -771,7 +773,7 @@ class _VideoViewerScreenState extends State<VideoViewerScreen> {
                       color: iconBg,
                       borderRadius: BorderRadius.circular(16),
                     ),
-                    child: Icon(icon, color: textColor),
+                    child: Icon(icon, color: iconColor),
                   ),
                   const SizedBox(width: 14),
                   Expanded(

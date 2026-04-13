@@ -121,6 +121,32 @@ class MainActivity : FlutterFragmentActivity() {
         // ── Wallpaper ─────────────────────────────────────────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, wallpaperChannel)
             .setMethodCallHandler { call, result ->
+                if (call.method == "setWallpaperWithIntent") {
+                    val assetIdStr = call.argument<String>("assetId")
+                    val assetType  = call.argument<Int>("assetType") ?: 1
+                    
+                    if (assetIdStr == null) {
+                        result.error("INVALID_ARGS", "assetId is required", null)
+                        return@setMethodCallHandler
+                    }
+                    val assetId = assetIdStr.toLongOrNull() ?: return@setMethodCallHandler result.error("INVALID", "Invalid ID", null)
+                    
+                    try {
+                        val itemUri = mediaStoreUri(assetId, assetType)
+                        val intent = Intent(Intent.ACTION_ATTACH_DATA).apply {
+                            addCategory(Intent.CATEGORY_DEFAULT)
+                            setDataAndType(itemUri, "image/*")
+                            putExtra("mimeType", "image/*")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(intent, "Set as"))
+                        result.success(null)
+                    } catch(e: Exception) {
+                        result.error("INTENT_ERROR", e.localizedMessage, null)
+                    }
+                    return@setMethodCallHandler
+                }
+
                 if (call.method != "setWallpaper") { result.notImplemented(); return@setMethodCallHandler }
 
                 val path  = call.argument<String>("path")

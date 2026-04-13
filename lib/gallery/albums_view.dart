@@ -102,20 +102,18 @@ class AlbumsView extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         gallery_album_widgets.buildGalleryStatsChip(
                           icon: Icons.folder_open_rounded,
-                          label: '${albums.length} folders',
+                          label: '${albums.where((a) => !a.album.isAll).length} folders',
                           color: colorScheme.primaryContainer.withOpacity(0.9),
                           textColor: colorScheme.onPrimaryContainer,
                         ),
                         gallery_album_widgets.buildGalleryStatsChip(
                           icon: Icons.photo_library_rounded,
-                          label:
-                              '${albums.fold<int>(0, (sum, album) => sum + album.count)} photos',
+                          label: '${albums.firstWhere((a) => a.album.isAll, orElse: () => albums.first).count} photos',
                           color: colorScheme.secondaryContainer.withOpacity(
                             0.9,
                           ),
