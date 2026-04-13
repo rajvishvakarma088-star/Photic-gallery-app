@@ -15,6 +15,7 @@ import 'gallery/gallery_section_builder.dart';
 import 'gallery/albums_view.dart';
 import 'gallery/gallery_album_widgets.dart' as gallery_album_widgets;
 import 'gallery/premium_refresh_control.dart';
+import 'gallery/premium_scrollbar.dart';
 import 'glass_container.dart';
 import 'services/favorites_database.dart';
 import 'services/gallery_service.dart';
@@ -3412,13 +3413,10 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           _pinchAccumulator = 1.0;
           _pinchStepConsumed = false;
         },
-        child: RawScrollbar(
+        child: PremiumScrollbar(
           controller: controller,
-          interactive: true,
-          thickness: 6.0,
-          radius: const Radius.circular(8),
-          thumbVisibility: false,
-          thumbColor: colorScheme.onSurface.withValues(alpha: 0.4),
+          topPadding: MediaQuery.of(context).padding.top + kToolbarHeight,
+          bottomPadding: 110,
           child: CustomScrollView(
           key: controller == scrollController
               ? _galleryScrollKey

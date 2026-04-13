@@ -395,6 +395,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ),
                       onTap: () {},
                     ),
+
+
+                    _buildSettingsTile(
+                      context: context,
+                      icon: Icons.swap_vert_circle_rounded,
+                      title: 'Fast Sliding Bar',
+                      subtitle: 'Enable the fast scroll slider on the right edge',
+                      iconColor: isDark ? const Color(0xFF81C784) : const Color(0xFF43A047),
+                      iconBgColor: isDark ? const Color(0xFF1B2A1E) : const Color(0xFFE8F5E9),
+                      trailing: Switch(
+                        value: settings.slidingBarEnabled,
+                        onChanged: (value) {
+                          ref.read(settingsProvider.notifier).toggleSlidingBar(value);
+                        },
+                      ),
+                      onTap: () {},
+                    ),
                   ],
                 ),
               ),

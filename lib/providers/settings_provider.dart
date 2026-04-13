@@ -18,6 +18,7 @@ class SettingsState {
   final bool duplicateDetection;
   final bool pullToRefreshEnabled;
   final bool safeFolderEnabled;
+  final bool slidingBarEnabled;
 
   const SettingsState({
     this.themeMode = ThemeMode.system,
@@ -35,6 +36,7 @@ class SettingsState {
     this.duplicateDetection = false,
     this.pullToRefreshEnabled = true,
     this.safeFolderEnabled = true,
+    this.slidingBarEnabled = true,
   });
 
   SettingsState copyWith({
@@ -53,6 +55,7 @@ class SettingsState {
     bool? duplicateDetection,
     bool? pullToRefreshEnabled,
     bool? safeFolderEnabled,
+    bool? slidingBarEnabled,
   }) {
     return SettingsState(
       themeMode: themeMode ?? this.themeMode,
@@ -70,6 +73,7 @@ class SettingsState {
       duplicateDetection: duplicateDetection ?? this.duplicateDetection,
       pullToRefreshEnabled: pullToRefreshEnabled ?? this.pullToRefreshEnabled,
       safeFolderEnabled: safeFolderEnabled ?? this.safeFolderEnabled,
+      slidingBarEnabled: slidingBarEnabled ?? this.slidingBarEnabled,
     );
   }
   bool isDark(BuildContext context) {
@@ -112,6 +116,7 @@ class SettingsNotifier extends Notifier<SettingsState> {
   static const _gridSizeKey = 'settings_grid_size';
   static const _pullToRefreshKey = 'settings_pull_to_refresh';
   static const _safeFolderKey = 'settings_safe_folder_enabled';
+  static const _slidingBarKey = 'settings_sliding_bar_enabled';
 
   SharedPreferences? _prefs;
 
@@ -134,6 +139,7 @@ class SettingsNotifier extends Notifier<SettingsState> {
     final gridSize = _prefs!.getDouble(_gridSizeKey) ?? 3.0;
     final pullToRefresh = _prefs!.getBool(_pullToRefreshKey) ?? true;
     final safeFolderEnabled = _prefs!.getBool(_safeFolderKey) ?? true;
+    final slidingBarEnabled = _prefs!.getBool(_slidingBarKey) ?? true;
 
     state = state.copyWith(
       themeMode: ThemeMode.values[themeModeIndex],
@@ -144,6 +150,7 @@ class SettingsNotifier extends Notifier<SettingsState> {
       gridSize: gridSize,
       pullToRefreshEnabled: pullToRefresh,
       safeFolderEnabled: safeFolderEnabled,
+      slidingBarEnabled: slidingBarEnabled,
     );
   }
 
@@ -185,6 +192,11 @@ class SettingsNotifier extends Notifier<SettingsState> {
   void toggleSafeFolder(bool enabled) {
     state = state.copyWith(safeFolderEnabled: enabled);
     _prefs?.setBool(_safeFolderKey, enabled);
+  }
+
+  void toggleSlidingBar(bool enabled) {
+    state = state.copyWith(slidingBarEnabled: enabled);
+    _prefs?.setBool(_slidingBarKey, enabled);
   }
 
   void toggleAiTagging(bool enabled) {

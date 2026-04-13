@@ -4,6 +4,7 @@ import '../glass_container.dart';
 import '../services/gallery_service.dart';
 import 'gallery_album_widgets.dart' as gallery_album_widgets;
 import 'premium_refresh_control.dart';
+import 'premium_scrollbar.dart';
 
 class AlbumsView extends StatelessWidget {
   final bool isLoadingAlbums;
@@ -53,13 +54,10 @@ class AlbumsView extends StatelessWidget {
         .where((album) => !album.isFeatured)
         .toList(growable: false);
 
-    return RawScrollbar(
+    return PremiumScrollbar(
       controller: albumsScrollController,
-      interactive: true,
-      thickness: 6.0,
-      radius: const Radius.circular(8),
-      thumbVisibility: false,
-      thumbColor: colorScheme.onSurface.withValues(alpha: 0.4),
+      topPadding: MediaQuery.of(context).padding.top + kToolbarHeight,
+      bottomPadding: 120,
       child: CustomScrollView(
         controller: albumsScrollController,
         physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics(decelerationRate: ScrollDecelerationRate.normal)),
