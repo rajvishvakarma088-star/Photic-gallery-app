@@ -136,6 +136,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   bool _shouldRefreshOnResume = false;
   static const Duration _resumeRefreshThreshold = Duration(minutes: 2);
   Timer? _mediaChangeDebounce;
+  bool _isScrollingFast = false;
+  Timer? _scrollVelocityTimer;
 
   bool get _isPinching => _activePointers >= 2;
   bool get isSelectionMode => selectedAssetIds.isNotEmpty;
@@ -233,6 +235,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     _thumbnailWarmupTimer?.cancel();
     _dragAutoScrollTimer?.cancel();
     _vaultHoldTimer?.cancel();
+    _scrollVelocityTimer?.cancel();
     _selectionCount.dispose();
     warmedThumbnailKeys.clear();
     seenThumbnailAssetIds.clear();
@@ -655,19 +658,15 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     if (box == null || !box.hasSize) return;
 
     final rect = box.localToGlobal(Offset.zero) & box.size;
-    const edgeThreshold = 92.0;
+    const edgeThreshold = 140.0;
     double velocity = 0;
 
     if (globalPosition.dy < rect.top + edgeThreshold) {
-      velocity =
-          -(((rect.top + edgeThreshold) - globalPosition.dy) / edgeThreshold)
-              .clamp(0.2, 1.0) *
-          18;
+      final ratio = (((rect.top + edgeThreshold) - globalPosition.dy) / edgeThreshold).clamp(0.0, 1.0);
+      velocity = -(ratio * ratio * 1.5).clamp(0.1, 1.0) * 44.0;
     } else if (globalPosition.dy > rect.bottom - edgeThreshold) {
-      velocity =
-          (((globalPosition.dy - (rect.bottom - edgeThreshold)) / edgeThreshold)
-              .clamp(0.2, 1.0)) *
-          18;
+      final ratio = ((globalPosition.dy - (rect.bottom - edgeThreshold)) / edgeThreshold).clamp(0.0, 1.0);
+      velocity = (ratio * ratio * 1.5).clamp(0.1, 1.0) * 44.0;
     }
 
     if (velocity == 0) {
@@ -1725,10 +1724,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   }
 
   Widget buildRecycleBinListView(ColorScheme colorScheme, {Future<void> Function()? onRefresh}) {
+    final adaptiveCacheExtent = (MediaQuery.of(context).size.height * 2.5).clamp(800.0, 3000.0);
     return CustomScrollView(
       controller: recycleBinScrollController,
       physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-      cacheExtent: 1400,
+      cacheExtent: adaptiveCacheExtent,
       slivers: [
         if (onRefresh != null)
           PremiumRefreshControl(
@@ -1739,7 +1739,10 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           padding: EdgeInsets.fromLTRB(8, MediaQuery.of(context).padding.top + kToolbarHeight + 8, 8, 20),
           sliver: SliverFixedExtentList(
             itemExtent: 116,
-            delegate: SliverChildBuilderDelegate((context, index) {
+            delegate: SliverChildBuilderDelegate(
+              addRepaintBoundaries: true,
+              addAutomaticKeepAlives: false,
+              (context, index) {
               final asset = recycleBinItems[index];
               final record = recycleBinRecords[asset.id];
               final filePath = record?.filePath ?? '';
@@ -2541,14 +2544,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     final id = '${asset.id}@$thumbPx';
     final placeholder = DecoratedBox(
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            Theme.of(context).colorScheme.surfaceContainerHighest,
-            Theme.of(context).colorScheme.surfaceContainer,
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
       ),
     );
 
@@ -3271,6 +3267,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           isFavorite: !isRecycleBinTab && favorites.contains(asset.id),
           isAnimating: !isRecycleBinTab && animating.contains(asset.id),
           isSelected: isSelected,
+          canAnimate: !_isScrollingFast,
           heroTag: asset.id,
           tileKey: tileKey,
         );
@@ -3300,6 +3297,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
       for (var i = 0; i < visibleImages.length; i++) visibleImages[i].id: i,
     };
 
+    // Adaptive cache: 2.5 screens of buffer, clamped between 800 and 3000.
+    // Low-end phones get a smaller buffer (less RAM pressure), high-end get more (smoother scroll-back).
+    final screenHeight = MediaQuery.of(context).size.height;
+    final adaptiveCacheExtent = (screenHeight * 2.5).clamp(800.0, 3000.0);
+
     final slivers = <Widget>[
       for (
         var sectionIndex = 0;
@@ -3316,11 +3318,18 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
         SliverPadding(
           padding: const EdgeInsets.only(top: 6),
           sliver: SliverGrid(
-            delegate: SliverChildBuilderDelegate((context, index) {
-              final asset = sections[sectionIndex].items[index];
-              final absoluteIndex = indexByAssetId[asset.id] ?? 0;
-              return buildGridTile(asset, visibleImages, absoluteIndex, settings);
-            }, childCount: sections[sectionIndex].items.length),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final asset = sections[sectionIndex].items[index];
+                final absoluteIndex = indexByAssetId[asset.id] ?? 0;
+                return RepaintBoundary(
+                  child: buildGridTile(asset, visibleImages, absoluteIndex, settings),
+                );
+              },
+              childCount: sections[sectionIndex].items.length,
+              addRepaintBoundaries: false, // We add manual RepaintBoundary for full control
+              addAutomaticKeepAlives: false,
+            ),
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: effectiveGridCount,
               mainAxisSpacing: 4,
@@ -3418,28 +3427,28 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           topPadding: MediaQuery.of(context).padding.top + kToolbarHeight,
           bottomPadding: 110,
           child: CustomScrollView(
-          key: controller == scrollController
-              ? _galleryScrollKey
-              : controller == favoritesScrollController
-              ? _favoritesScrollKey
-              : PageStorageKey('grid-$selectedIndex'),
-          controller: controller,
-          cacheExtent: 600,
-          physics: _isPinching
-              ? const NeverScrollableScrollPhysics()
-              : const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics(decelerationRate: ScrollDecelerationRate.normal)),
-          slivers: [
-            if (onRefresh != null)
-              PremiumRefreshControl(
-                onRefresh: onRefresh,
-                topPadding: MediaQuery.of(context).padding.top + kToolbarHeight,
-              ),
-            SliverPadding(
-              padding: EdgeInsets.fromLTRB(4, MediaQuery.of(context).padding.top + kToolbarHeight + 4, 4, 110),
-              sliver: SliverMainAxisGroup(slivers: slivers),
-            ),
-          ],
-         ),
+              key: controller == scrollController
+                  ? _galleryScrollKey
+                  : controller == favoritesScrollController
+                  ? _favoritesScrollKey
+                  : PageStorageKey('grid-$selectedIndex'),
+              controller: controller,
+              cacheExtent: adaptiveCacheExtent,
+              physics: _isPinching
+                  ? const NeverScrollableScrollPhysics()
+                  : const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics(decelerationRate: ScrollDecelerationRate.normal)),
+              slivers: [
+                if (onRefresh != null)
+                  PremiumRefreshControl(
+                    onRefresh: onRefresh,
+                    topPadding: MediaQuery.of(context).padding.top + kToolbarHeight,
+                  ),
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(4, MediaQuery.of(context).padding.top + kToolbarHeight + 4, 4, 110),
+                  sliver: SliverMainAxisGroup(slivers: slivers),
+                ),
+              ],
+             ),
         ),
       ),
     );

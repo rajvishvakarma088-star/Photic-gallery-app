@@ -606,6 +606,8 @@ class _SearchScreenState extends State<SearchScreen> {
         ? 'Search results (${_filteredAssets.length} so far)'
         : 'Search results (${_filteredAssets.length})';
 
+    final adaptiveCacheExtent = (MediaQuery.of(context).size.height * 2.5).clamp(800.0, 3000.0);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -639,7 +641,9 @@ class _SearchScreenState extends State<SearchScreen> {
             controller: _resultsScrollController,
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 100),
             physics: const BouncingScrollPhysics(),
-            cacheExtent: 900,
+            cacheExtent: adaptiveCacheExtent,
+            addRepaintBoundaries: false, // Manual RepaintBoundary per tile
+            addAutomaticKeepAlives: false,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 3,
               crossAxisSpacing: 4,
@@ -648,13 +652,15 @@ class _SearchScreenState extends State<SearchScreen> {
             itemCount: _filteredAssets.length,
             itemBuilder: (context, index) {
               final asset = _filteredAssets[index];
-              return grid_widgets.buildGalleryGridTile(
-                asset: asset,
-                image: _buildSearchThumb(asset),
-                onTap: () => _onAssetTap(asset),
-                onDoubleTap: () {},
-                isFavorite: false,
-                isAnimating: false,
+              return RepaintBoundary(
+                child: grid_widgets.buildGalleryGridTile(
+                  asset: asset,
+                  image: _buildSearchThumb(asset),
+                  onTap: () => _onAssetTap(asset),
+                  onDoubleTap: () {},
+                  isFavorite: false,
+                  isAnimating: false,
+                ),
               );
             },
           ),

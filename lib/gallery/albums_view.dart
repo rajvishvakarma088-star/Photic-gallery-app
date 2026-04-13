@@ -54,6 +54,9 @@ class AlbumsView extends StatelessWidget {
         .where((album) => !album.isFeatured)
         .toList(growable: false);
 
+    // Adaptive cache: 2.5 screens of buffer, clamped for device RAM safety.
+    final adaptiveCacheExtent = (MediaQuery.of(context).size.height * 2.5).clamp(800.0, 3000.0);
+
     return PremiumScrollbar(
       controller: albumsScrollController,
       topPadding: MediaQuery.of(context).padding.top + kToolbarHeight,
@@ -61,7 +64,7 @@ class AlbumsView extends StatelessWidget {
       child: CustomScrollView(
         controller: albumsScrollController,
         physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics(decelerationRate: ScrollDecelerationRate.normal)),
-        cacheExtent: 1400,
+        cacheExtent: adaptiveCacheExtent,
         slivers: [
           if (onRefresh != null)
             PremiumRefreshControl(
@@ -156,7 +159,7 @@ class AlbumsView extends StatelessWidget {
             child: SizedBox(
               height: 220,
               child: ListView.separated(
-                cacheExtent: 1000,
+                cacheExtent: adaptiveCacheExtent,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 scrollDirection: Axis.horizontal,
                 physics: const BouncingScrollPhysics(
@@ -196,18 +199,25 @@ class AlbumsView extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
           sliver: SliverFixedExtentList(
             itemExtent: 110,
-            delegate: SliverChildBuilderDelegate((context, index) {
-              final album = otherAlbums[index];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: gallery_album_widgets.buildAlbumListTile(
-                  album: album,
-                  colorScheme: colorScheme,
-                  buildImage: buildImage,
-                  onTap: () => onAlbumTap(album),
-                ),
-              );
-            }, childCount: otherAlbums.length),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final album = otherAlbums[index];
+                return RepaintBoundary(
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: gallery_album_widgets.buildAlbumListTile(
+                      album: album,
+                      colorScheme: colorScheme,
+                      buildImage: buildImage,
+                      onTap: () => onAlbumTap(album),
+                    ),
+                  ),
+                );
+              },
+              childCount: otherAlbums.length,
+              addRepaintBoundaries: false, // Manual RepaintBoundary above
+              addAutomaticKeepAlives: false,
+            ),
           ),
         ),
       ],
