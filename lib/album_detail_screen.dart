@@ -22,11 +22,13 @@ class AlbumDetailScreen extends ConsumerStatefulWidget {
     required this.title,
     required this.album,
     required this.images,
+    this.loadInitialPhotos = false,
   });
 
   final String title;
   final AssetPathEntity album;
   final List<AssetEntity> images;
+  final bool loadInitialPhotos;
 
   @override
   ConsumerState<AlbumDetailScreen> createState() => _AlbumDetailScreenState();
@@ -120,9 +122,13 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
     super.initState();
     albumImages = List<AssetEntity>.from(widget.images);
     _hasMorePhotos = widget.images.length >= _pageSize;
+    isLoadingPhotos = widget.loadInitialPhotos;
     _photoScrollController.addListener(_onPhotoScroll);
     _videoScrollController.addListener(_onVideoScroll);
     unawaited(_syncPhotoPaginationState());
+    if (widget.loadInitialPhotos) {
+      unawaited(_loadInitialAlbumPhotos());
+    }
     unawaited(_loadInitialAlbumVideos());
   }
 
@@ -829,6 +835,7 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
           scrollController: _photoScrollController,
           tab: 0,
           settings: settings,
+          isLoading: isLoadingPhotos,
         ),
         // Page 1 – Videos (always uses _videoScrollController)
         _buildGrid(
@@ -1195,6 +1202,25 @@ class _AlbumDetailScreenState extends ConsumerState<AlbumDetailScreen> {
     if (!mounted) return;
     setState(() {
       _hasMorePhotos = count > albumImages.length;
+    });
+  }
+
+  Future<void> _loadInitialAlbumPhotos() async {
+    final photos = await service.fetchAlbumImages(
+      widget.album,
+      page: 0,
+      size: _pageSize,
+    );
+    if (!mounted) return;
+    setState(() {
+      albumImages = photos;
+      _currentPhotoPage = photos.isEmpty ? -1 : 0;
+      _hasMorePhotos = photos.length == _pageSize;
+      isLoadingPhotos = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || selectedMediaTab != 0) return;
+      _scheduleThumbnailWarmup();
     });
   }
 

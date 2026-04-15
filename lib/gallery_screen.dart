@@ -115,6 +115,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   bool _pinchStepConsumed = false;
   bool _isPrefetchingNextPage = false;
   bool _isViewerTransitioning = false;
+  bool _isOpeningAlbum = false;
   bool? _dragSelectionTargetValue;
   final Set<String> _dragSelectionTouchedIds = {};
   Timer? _dragAutoScrollTimer;
@@ -3039,41 +3040,44 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   }
 
   Future<void> _openAlbum(AlbumSummary album) async {
-    final albumImages = filterRecycleBinItems(
-      await service.fetchAlbumImages(album.album),
-    );
-    if (!mounted || albumImages.isEmpty) return;
+    if (_isOpeningAlbum || !mounted) return;
+    _isOpeningAlbum = true;
 
-    await Navigator.push(
-      context,
-      PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 300),
-        reverseTransitionDuration: const Duration(milliseconds: 260),
-        pageBuilder: (context, animation, secondaryAnimation) =>
-            AlbumDetailScreen(
-          title: album.name,
-          album: album.album,
-          images: albumImages,
+    try {
+      await Navigator.push(
+        context,
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 300),
+          reverseTransitionDuration: const Duration(milliseconds: 260),
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              AlbumDetailScreen(
+            title: album.name,
+            album: album.album,
+            images: const [],
+            loadInitialPhotos: true,
+          ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            final curved = CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+              reverseCurve: Curves.easeInCubic,
+            );
+            return FadeTransition(
+              opacity: curved,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.04),
+                  end: Offset.zero,
+                ).animate(curved),
+                child: child,
+              ),
+            );
+          },
         ),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          final curved = CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-            reverseCurve: Curves.easeInCubic,
-          );
-          return FadeTransition(
-            opacity: curved,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0, 0.04),
-                end: Offset.zero,
-              ).animate(curved),
-              child: child,
-            ),
-          );
-        },
-      ),
-    );
+      );
+    } finally {
+      _isOpeningAlbum = false;
+    }
   }
 
   Widget buildGridTile(
