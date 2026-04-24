@@ -45,7 +45,7 @@ class GalleryRepository extends GalleryService {
   static final GalleryRepository instance = GalleryRepository._();
 
   static const EventChannel _mediaStoreChangeChannel = EventChannel(
-    'com.example.pixora/media_store_changes',
+    'com.example.photicgallery/media_store_changes',
   );
 
   final StreamController<GalleryChangeEvent> _changeController =

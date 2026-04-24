@@ -98,7 +98,7 @@ class MyApp extends ConsumerWidget {
     final settings = ref.watch(settingsProvider);
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Premium Gallery',
+      title: 'Photic Gallery',
       theme: _buildTheme(Brightness.light, settings),
       darkTheme: _buildTheme(Brightness.dark, settings),
       themeMode: settings.themeMode,

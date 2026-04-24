@@ -127,7 +127,7 @@ Gallery App brings your media tools together in a single, clean interface. The a
 1. Clone the repository.
    ```bash
    git clone <repo-url>
-   cd pixora
+   cd photic_gallery
    ```
 2. Install dependencies.
    ```bash
