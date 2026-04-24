@@ -1,7 +1,7 @@
 # Photic Gallery
 
 <p align="center">
-  <img src="assets/logo.png" alt="Photic Gallery logo" width="180" />
+  <img src="assets/2.png" alt="Photic Gallery logo" width="180" />
 </p>
 
 <p align="center">
