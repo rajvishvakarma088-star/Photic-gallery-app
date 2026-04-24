@@ -1,11 +1,15 @@
 # Photic Gallery
 
 <p align="center">
-  <img src="assets/2.png" alt="Photic Gallery logo" width="180" />
+  <img src="assets/2.png" alt="Photic Gallery cover image" width="100%" style="border-radius: 28px;" />
 </p>
 
 <p align="center">
-  A premium, local-first Flutter gallery built for people who want one polished place to browse photos, watch videos, protect private media, recover deleted items, and play music stored on the device.
+  <strong>A premium, local-first Flutter gallery for photos, videos, music, and private media.</strong>
+</p>
+
+<p align="center">
+  Browse, protect, recover, and enjoy on-device media in one polished Flutter app with gallery tools, immersive viewers, a safe folder, and a built-in music experience.
 </p>
 
 <p align="center">
@@ -14,6 +18,15 @@
   <img src="https://img.shields.io/badge/UI-Glassmorphism-E9D5FF?style=for-the-badge" alt="UI badge" />
   <img src="https://img.shields.io/badge/Media-Photos%20%7C%20Videos%20%7C%20Music-111827?style=for-the-badge" alt="Media badge" />
   <img src="https://img.shields.io/badge/Privacy-Safe%20Folder%20%2B%20Biometrics-7C3AED?style=for-the-badge" alt="Privacy badge" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/rajvishvakarma088-star/GallerySnoop/releases/latest">
+    <img src="https://img.shields.io/badge/Download-Latest%20APK-16A34A?style=for-the-badge&logo=android&logoColor=white" alt="Download latest APK" />
+  </a>
+  <a href="#screenshots">
+    <img src="https://img.shields.io/badge/View-Screenshots-0F172A?style=for-the-badge&logo=github&logoColor=white" alt="View screenshots" />
+  </a>
 </p>
 
 <p align="center">
@@ -41,10 +54,14 @@ This repository contains the Flutter app, platform configuration, launcher icons
 ## Cover Preview
 
 <p align="center">
-  <img src="assets/gallery_main_screen.png" alt="Main gallery screen" width="23%" />
-  <img src="assets/photo_viwer.png" alt="Photo viewer screen" width="23%" />
-  <img src="assets/music_screen.png" alt="Music player screen" width="23%" />
-  <img src="assets/dark_setting.png" alt="Dark settings screen" width="23%" />
+  <img src="assets/gallery_main_screen.png" alt="Main gallery screen" width="23%" style="border-radius: 20px;" />
+  <img src="assets/photo_viwer.png" alt="Photo viewer screen" width="23%" style="border-radius: 20px;" />
+  <img src="assets/music_screen.png" alt="Music player screen" width="23%" style="border-radius: 20px;" />
+  <img src="assets/dark_setting.png" alt="Dark settings screen" width="23%" style="border-radius: 20px;" />
+</p>
+
+<p align="center">
+  <sub>Main gallery • immersive photo viewer • built-in music player • dark settings</sub>
 </p>
 
 ## Why It Stands Out
@@ -116,28 +133,28 @@ This repository contains the Flutter app, platform configuration, launcher icons
 ### Main Surfaces
 
 <p align="center">
-  <img src="assets/gallery_main_screen.png" alt="Gallery home" width="23%" />
-  <img src="assets/album_screen.png" alt="Albums overview" width="23%" />
-  <img src="assets/favorites_screen.png" alt="Favorites view" width="23%" />
-  <img src="assets/recycle_bin_screen.png" alt="Recycle bin view" width="23%" />
+  <img src="assets/gallery_main_screen.png" alt="Gallery home" width="23%" style="border-radius: 20px;" />
+  <img src="assets/album_screen.png" alt="Albums overview" width="23%" style="border-radius: 20px;" />
+  <img src="assets/favorites_screen.png" alt="Favorites view" width="23%" style="border-radius: 20px;" />
+  <img src="assets/recycle_bin_screen.png" alt="Recycle bin view" width="23%" style="border-radius: 20px;" />
 </p>
 
 ### Media Actions
 
 <p align="center">
-  <img src="assets/photo_viwer.png" alt="Photo viewer" width="23%" />
-  <img src="assets/photo_viewer_menu.png" alt="Photo viewer menu" width="23%" />
-  <img src="assets/music_screen.png" alt="Now playing screen" width="23%" />
-  <img src="assets/music_list_screen.png" alt="Music list screen" width="23%" />
+  <img src="assets/photo_viwer.png" alt="Photo viewer" width="23%" style="border-radius: 20px;" />
+  <img src="assets/photo_viewer_menu.png" alt="Photo viewer menu" width="23%" style="border-radius: 20px;" />
+  <img src="assets/music_screen.png" alt="Now playing screen" width="23%" style="border-radius: 20px;" />
+  <img src="assets/music_list_screen.png" alt="Music list screen" width="23%" style="border-radius: 20px;" />
 </p>
 
 ### Navigation & Theme
 
 <p align="center">
-  <img src="assets/menu_screen_main.png" alt="Side menu and quick actions" width="23%" />
-  <img src="assets/dark_gallery_screen.png" alt="Dark gallery screen" width="23%" />
-  <img src="assets/dark_setting.png" alt="Dark settings screen" width="23%" />
-  <img src="assets/folder_detail_screen.png" alt="Folder detail screen" width="23%" />
+  <img src="assets/menu_screen_main.png" alt="Side menu and quick actions" width="23%" style="border-radius: 20px;" />
+  <img src="assets/dark_gallery_screen.png" alt="Dark gallery screen" width="23%" style="border-radius: 20px;" />
+  <img src="assets/dark_setting.png" alt="Dark settings screen" width="23%" style="border-radius: 20px;" />
+  <img src="assets/folder_detail_screen.png" alt="Folder detail screen" width="23%" style="border-radius: 20px;" />
 </p>
 
 ## Product Snapshot
