@@ -28,5 +28,9 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app requires access to your photo library to show photos and videos.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>This app requires access to Apple Music to play audio files.</string>
 </dict>
 </plist>

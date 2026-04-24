@@ -43,10 +43,11 @@ class ViewerScreen extends StatefulWidget {
     BuildContext context,
     AssetEntity asset,
   ) {
+    final isMac = Platform.isMacOS;
     return AssetEntityImageProvider(
       asset,
-      isOriginal: false,
-      thumbnailSize: const ThumbnailSize.square(800),
+      isOriginal: isMac ? true : false,
+      thumbnailSize: isMac ? const ThumbnailSize.square(800) : const ThumbnailSize.square(800),
       thumbnailFormat: ThumbnailFormat.jpeg,
     );
   }
@@ -147,10 +148,11 @@ class _ViewerScreenState extends State<ViewerScreen> {
         }
       }
 
+      final isMac = Platform.isMacOS;
       return AssetEntityImageProvider(
         asset,
-        isOriginal: false, // Essential to prevent HEVC decoding lag in Flutter itself
-        thumbnailSize: ThumbnailSize(width, height),
+        isOriginal: isMac ? true : false, // macOS fails to generate massive 4K thumbnails, just use original
+        thumbnailSize: isMac ? const ThumbnailSize.square(200) : ThumbnailSize(width, height),
         thumbnailFormat: ThumbnailFormat.jpeg,
       );
     });
