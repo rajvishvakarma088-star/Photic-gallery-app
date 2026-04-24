@@ -12,7 +12,7 @@
 <uses-permission android:name="android.permission.SET_WALLPAPER"/>
 
     <application
-        android:label="rajappppp"
+        android:label="Pixora"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

@@ -4,7 +4,7 @@ class ScreenshotProtectionService {
   ScreenshotProtectionService._();
 
   static const MethodChannel _channel = MethodChannel(
-    'com.example.rajappppp/screen_security',
+    'com.example.pixora/screen_security',
   );
 
   static Future<void> setProtected(bool enabled) async {

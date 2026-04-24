@@ -1,4 +1,4 @@
-package com.example.rajappppp
+package com.example.pixora
 
 import android.app.RecoverableSecurityException
 import android.app.WallpaperManager
@@ -16,9 +16,9 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterFragmentActivity() {
 
-    private val screenSecureChannel = "com.example.rajappppp/screen_security"
-    private val wallpaperChannel    = "com.rajappppp/wallpaper"
-    private val renameChannel       = "com.rajappppp/rename"
+    private val screenSecureChannel = "com.example.pixora/screen_security"
+    private val wallpaperChannel    = "com.pixora/wallpaper"
+    private val renameChannel       = "com.pixora/rename"
 
     companion object {
         private const val RENAME_REQUEST_CODE = 1001

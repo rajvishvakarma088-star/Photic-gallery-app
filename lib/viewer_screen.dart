@@ -1418,8 +1418,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
   }
 
   // ── Rename + Wallpaper channels ──────────────────────────────────
-  static const _renameChannel = MethodChannel('com.rajappppp/rename');
-  static const _wallpaperChannel = MethodChannel('com.rajappppp/wallpaper');
+  static const _renameChannel = MethodChannel('com.pixora/rename');
+  static const _wallpaperChannel = MethodChannel('com.pixora/wallpaper');
 
   Future<void> _setWallpaper(int which) async {
     final file = await _currentAsset.file;
