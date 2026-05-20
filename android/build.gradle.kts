@@ -18,12 +18,17 @@ subprojects {
     afterEvaluate {
         if (project.hasProperty("android")) {
             val extension = project.extensions.getByName("android") as com.android.build.gradle.BaseExtension
+            
+            if (extension.namespace == null) {
+                extension.namespace = "com.example." + project.name.replace(":", "").replace("-", "_")
+            }
+
             val currentSdk = extension.compileSdkVersion
             if (currentSdk != null) {
                 try {
                     val versionString = currentSdk.replace("android-", "")
                     val versionInt = versionString.toIntOrNull()
-                    if (versionInt != null && versionInt < 31) {
+                    if (versionInt != null && versionInt < 36) {
                         extension.compileSdkVersion(36)
                         extension.buildToolsVersion("36.0.0")
                     }

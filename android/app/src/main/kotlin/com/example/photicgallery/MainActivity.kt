@@ -42,6 +42,35 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // ── AR Channel ────────────────────────────────────────────────────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.photic.gallery/ar")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "openAR") {
+                    val imagePath = call.argument<String>("imagePath")
+                    if (imagePath == null) {
+                        result.error("INVALID_ARGS", "imagePath is required", null)
+                        return@setMethodCallHandler
+                    }
+
+                    val availability = com.google.ar.core.ArCoreApk.getInstance().checkAvailability(this)
+                    if (availability == com.google.ar.core.ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE) {
+                        result.error("AR_UNAVAILABLE", "AR not supported on this device", null)
+                    } else {
+                        try {
+                            val intent = Intent(this, ARViewerActivity::class.java).apply {
+                                putExtra("imagePath", imagePath)
+                            }
+                            startActivity(intent)
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("AR_LAUNCH_FAILED", e.localizedMessage ?: e.toString(), null)
+                        }
+                    }
+                } else {
+                    result.notImplemented()
+                }
+            }
+
         // ── Screen security ───────────────────────────────────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, screenSecureChannel)
             .setMethodCallHandler { call, result ->

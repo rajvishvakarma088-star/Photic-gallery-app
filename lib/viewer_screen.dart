@@ -1047,6 +1047,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
                   toggleFavorite,
                   color: isFavorite ? const Color(0xFFE66A74) : null,
                 ),
+                _actionIcon(Icons.view_in_ar, isDark, viewInAR, tooltip: 'View in AR'),
                 _actionIcon(Icons.info_outline_rounded, isDark, () => openDetails()),
                 _actionIcon(Icons.delete_outline_rounded, isDark, deleteAsset),
               ],
@@ -1062,10 +1063,12 @@ class _ViewerScreenState extends State<ViewerScreen> {
     bool isDark,
     VoidCallback onTap, {
     Color? color,
+    String? tooltip,
   }) {
     return IconButton(
       iconSize: isDark ? 28 : 26,
       padding: EdgeInsets.zero,
+      tooltip: tooltip,
       icon: Icon(
         icon,
         color: color ?? (isDark ? Colors.white : const Color(0xFF333333)),
@@ -1121,6 +1124,25 @@ class _ViewerScreenState extends State<ViewerScreen> {
     await SharePlus.instance.share(
       ShareParams(files: [XFile(file.path)], text: text, subject: subject),
     );
+  }
+
+  Future<void> viewInAR() async {
+    final asset = widget.images[currentIndexNotifier.value];
+    final file = await asset.file;
+    if (file == null) {
+      _showViewerSnackBar('Image file not available');
+      return;
+    }
+    try {
+      const arChannel = MethodChannel('com.photic.gallery/ar');
+      await arChannel.invokeMethod('openAR', {
+        'imagePath': file.path,
+      });
+    } on PlatformException catch (e) {
+      _showViewerSnackBar('AR not available: ${e.message}');
+    } catch (e) {
+      _showViewerSnackBar('Could not start AR');
+    }
   }
 
   Future<void> shareAsset() async {
